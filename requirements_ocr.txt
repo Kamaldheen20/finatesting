@@ -1,0 +1,12 @@
+Flask
+Flask-SQLAlchemy
+Flask-Login
+python-dotenv
+openpyxl
+reportlab
+psycopg2-binary
+Pillow
+numpy
+torch
+transformers
+sentencepiece

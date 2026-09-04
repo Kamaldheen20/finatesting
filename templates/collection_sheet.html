@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collection Sheet</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body{
+    background:#f8f9fa;
+}
+.table-responsive{
+    overflow-x:auto;
+}
+th,td{
+    text-align:center;
+    white-space:nowrap;
+    font-size:14px;
+}
+thead{
+    position:sticky;
+    top:0;
+    background:white;
+    z-index:100;
+}
+</style>
+</head>
+
+<body class="bg-light">
+<div class="container-fluid mt-4">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Monthly Collection Sheet</h2>
+    <div class="d-flex gap-2">
+        <a href="/dashboard" class="btn btn-primary">Dashboard</a>
+        <a href="/customer_ledger" class="btn btn-info">Customer Ledger</a>
+        <a href="/export_collection/{{ selected_month }}" class="btn btn-success">Export Excel</a>
+        <a href="/export_collection_pdf/{{ selected_month }}" class="btn btn-danger">Export PDF</a>
+    </div>
+</div>
+
+<form method="GET">
+    <div class="row mb-3">
+        <div class="col-md-3">
+            <input type="month" name="month" value="{{ selected_month }}" class="form-control">
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-success">Load</button>
+        </div>
+    </div>
+</form>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <input type="text" id="searchInput" class="form-control" placeholder="Search Customer ID or Name">
+    </div>
+</div>
+
+<div class="table-responsive">
+<table id="collectionTable" class="table table-bordered table-striped table-hover">
+
+<thead class="table-dark">
+<tr>
+    <th>ID</th>
+    <th>Name</th>
+    <th>Loan</th>
+    {% for day in range(1,32) %}
+    <th>{{ day }}</th>
+    {% endfor %}
+    <th>Month Total</th>
+    <th>Total Paid</th>
+    <th>Balance</th>
+    <th>Status</th>
+</tr>
+</thead>
+
+<tbody>
+{% for customer in customers %}
+<tr>
+    <td>{{ customer.customer_id }}</td>
+    <td>{{ customer.name }}</td>
+    <td>₹{{ customer.loan_amount }}</td>
+
+    {% set cust_days = daily_totals.get(customer.customer_id, {}) %}
+    {% for day in range(1,32) %}
+        <td>{{ cust_days.get(day, '-') }}</td>
+    {% endfor %}
+
+    <td>₹{{ month_totals.get(customer.customer_id, 0) }}</td>
+    <td>₹{{ customer.total_paid }}</td>
+    <td>₹{{ customer.remaining_balance }}</td>
+    <td>
+        {% if customer.status == "Closed" %}
+        <span class="badge bg-success">Closed</span>
+        {% else %}
+        <span class="badge bg-warning text-dark">Active</span>
+        {% endif %}
+    </td>
+</tr>
+{% endfor %}
+
+<tr class="table-success fw-bold">
+    <td colspan="3">DAY TOTAL</td>
+
+    {% for day in range(1,32) %}
+    <td>₹{{ day_totals.get(day, 0) }}</td>
+    {% endfor %}
+
+    <td>₹{{ month_collection }}</td>
+    <td>₹{{ total_paid_all }}</td>
+    <td>₹{{ total_balance_all }}</td>
+    <td>-</td>
+</tr>
+</tbody>
+
+</table>
+</div>
+
+</div>
+
+<script>
+document.getElementById("searchInput").addEventListener("keyup", function(){
+    let value = this.value.toLowerCase();
+    let rows = document.querySelectorAll("#collectionTable tbody tr");
+
+    rows.forEach(row => {
+        let customerId = row.cells[0] ? row.cells[0].innerText.toLowerCase() : "";
+        let name = row.cells[1] ? row.cells[1].innerText.toLowerCase() : "";
+
+        let searchMatch =
+            customerId.includes(value) ||
+            name.includes(value);
+
+        row.style.display = searchMatch ? "" : "none";
+    });
+});
+</script>
+
+</body>
+</html>

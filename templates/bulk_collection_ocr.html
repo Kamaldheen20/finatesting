@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk OCR Collection</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body { background:#f8f9fa; }
+.card { border-radius:12px; }
+.preview-img { max-height:180px; max-width:100%; object-fit:contain; border:1px solid #dee2e6; border-radius:8px; }
+#processingBox { display:none; }
+.table td, .table th { vertical-align:middle; white-space:nowrap; }
+.low-confidence { background:#fff3cd !important; }
+.status-valid { color:#198754; font-weight:700; }
+.status-review { color:#856404; font-weight:700; }
+.status-invalid { color:#dc3545; font-weight:700; }
+.small-muted { font-size:.85rem; color:#6c757d; }
+</style>
+</head>
+<body>
+<div class="container-fluid py-4">
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Bulk Handwritten Collection OCR</h2>
+    <div class="d-flex gap-2">
+        <a href="/dashboard" class="btn btn-primary">Dashboard</a>
+        <a href="/collection_sheet" class="btn btn-info">Collection Sheet</a>
+    </div>
+</div>
+
+<div id="alertBox"></div>
+
+<div class="card shadow-sm p-3 mb-4">
+    <div class="row g-3 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label fw-bold">Collection Date</label>
+            <input type="date" id="paymentDate" class="form-control">
+        </div>
+        <div class="col-md-4">
+            <label class="form-label fw-bold">Photo Rotation</label>
+            <select id="rotation" class="form-select">
+                <option value="0">0° — Normal</option>
+                <option value="90">90°</option>
+                <option value="180">180°</option>
+                <option value="270">270°</option>
+            </select>
+            <div class="small-muted mt-1">Your uploaded sheets appear sideways, so test 90° or 270° if needed.</div>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label fw-bold">Handwritten Sheet Images</label>
+            <input type="file" id="images" class="form-control" accept="image/jpeg,image/png,image/webp" multiple>
+        </div>
+    </div>
+
+    <div id="previewArea" class="row g-3 mt-2"></div>
+
+    <div class="d-flex gap-2 mt-3">
+        <button id="processBtn" class="btn btn-dark" type="button">📷 Process OCR</button>
+        <button id="clearBtn" class="btn btn-outline-secondary" type="button">Clear</button>
+    </div>
+</div>
+
+<div id="processingBox" class="alert alert-info">
+    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+    Processing handwritten pages. This can take time on the first run because the local TrOCR model must load.
+</div>
+
+<div id="resultSection" style="display:none;">
+    <div class="row g-3 mb-3">
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Total Entries</b><div id="statEntries">0</div></div></div>
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Valid</b><div id="statValid">0</div></div></div>
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Review</b><div id="statReview">0</div></div></div>
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Invalid</b><div id="statInvalid">0</div></div></div>
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Duplicates</b><div id="statDuplicate">0</div></div></div>
+        <div class="col-md-2"><div class="card shadow-sm p-3"><b>Total Amount</b><div>₹<span id="statAmount">0</span></div></div></div>
+    </div>
+
+    <div class="card shadow-sm p-3">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="mb-0">Verify OCR Results</h4>
+            <button id="uploadBtn" class="btn btn-success">✓ Upload Valid Entries</button>
+        </div>
+
+        <div class="table-responsive">
+        <table class="table table-bordered table-hover" id="ocrTable">
+            <thead class="table-dark">
+            <tr>
+                <th>Use</th>
+                <th>#</th>
+                <th>Page</th>
+                <th>Customer Reg No</th>
+                <th>Amount</th>
+                <th>Confidence</th>
+                <th>Status</th>
+                <th>OCR Notes</th>
+                <th>Action</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+</div>
+
+<script>
+const imagesInput = document.getElementById("images");
+const previewArea = document.getElementById("previewArea");
+const processBtn = document.getElementById("processBtn");
+const clearBtn = document.getElementById("clearBtn");
+const uploadBtn = document.getElementById("uploadBtn");
+const processingBox = document.getElementById("processingBox");
+const resultSection = document.getElementById("resultSection");
+const tableBody = document.querySelector("#ocrTable tbody");
+const paymentDate = document.getElementById("paymentDate");
+let entries = [];
+
+const today = new Date().toISOString().split("T")[0];
+paymentDate.value = localStorage.getItem("workingDate") || today;
+
+function showAlert(message, type="danger") {
+    document.getElementById("alertBox").innerHTML =
+        `<div class="alert alert-${type} alert-dismissible fade show">
+            ${escapeHtml(message)}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+         </div>`;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&","&amp;").replaceAll("<","&lt;")
+        .replaceAll(">","&gt;").replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+}
+
+imagesInput.addEventListener("change", function() {
+    previewArea.innerHTML = "";
+    Array.from(this.files).forEach((file, i) => {
+        const col = document.createElement("div");
+        col.className = "col-md-3";
+        const url = URL.createObjectURL(file);
+        col.innerHTML = `
+            <div class="card p-2 h-100">
+                <img src="${url}" class="preview-img w-100" alt="Page ${i+1}">
+                <div class="small mt-2 text-truncate">${escapeHtml(file.name)}</div>
+            </div>`;
+        previewArea.appendChild(col);
+    });
+});
+
+function recalculate() {
+    let valid=0, review=0, invalid=0, duplicate=0, total=0;
+    entries.forEach((e, i) => {
+        if (!e.selected) return;
+        total += Number(e.amount) || 0;
+        if (e.validation === "VALID") valid++;
+        else if (e.validation === "REVIEW") review++;
+        else if (e.validation === "DUPLICATE") duplicate++;
+        else invalid++;
+    });
+    document.getElementById("statEntries").textContent = entries.length;
+    document.getElementById("statValid").textContent = valid;
+    document.getElementById("statReview").textContent = review;
+    document.getElementById("statInvalid").textContent = invalid;
+    document.getElementById("statDuplicate").textContent = duplicate;
+    document.getElementById("statAmount").textContent = total.toLocaleString("en-IN", {maximumFractionDigits:2});
+}
+
+function renderTable() {
+    tableBody.innerHTML = "";
+    entries.forEach((e, i) => {
+        const tr = document.createElement("tr");
+        if (e.validation === "REVIEW" || Number(e.confidence) < 80) tr.classList.add("low-confidence");
+
+        let statusClass = e.validation === "VALID" ? "status-valid" :
+                          (e.validation === "REVIEW" ? "status-review" : "status-invalid");
+
+        tr.innerHTML = `
+            <td><input class="form-check-input select-entry" type="checkbox" data-index="${i}" ${e.selected ? "checked" : ""}></td>
+            <td>${i+1}</td>
+            <td>${escapeHtml(e.page)}</td>
+            <td><input class="form-control form-control-sm reg-input" data-index="${i}" value="${escapeHtml(e.customer_reg_no)}"></td>
+            <td><input type="number" min="0.01" step="0.01" class="form-control form-control-sm amount-input" data-index="${i}" value="${Number(e.amount || 0)}"></td>
+            <td>${escapeHtml(e.confidence)}%</td>
+            <td class="${statusClass}">${escapeHtml(e.validation)}</td>
+            <td class="small-muted">${escapeHtml(e.notes || "")}</td>
+            <td><button class="btn btn-sm btn-outline-danger delete-entry" data-index="${i}">Delete</button></td>
+        `;
+        tableBody.appendChild(tr);
+    });
+
+    document.querySelectorAll(".select-entry").forEach(el => {
+        el.addEventListener("change", () => {
+            entries[Number(el.dataset.index)].selected = el.checked;
+            recalculate();
+        });
+    });
+
+    document.querySelectorAll(".reg-input").forEach(el => {
+        el.addEventListener("change", () => {
+            entries[Number(el.dataset.index)].customer_reg_no = el.value.trim();
+            entries[Number(el.dataset.index)].validation = "REVIEW";
+            renderTable();
+        });
+    });
+
+    document.querySelectorAll(".amount-input").forEach(el => {
+        el.addEventListener("change", () => {
+            entries[Number(el.dataset.index)].amount = Number(el.value);
+            entries[Number(el.dataset.index)].validation = "REVIEW";
+            renderTable();
+        });
+    });
+
+    document.querySelectorAll(".delete-entry").forEach(el => {
+        el.addEventListener("click", () => {
+            entries.splice(Number(el.dataset.index), 1);
+            renderTable();
+            recalculate();
+        });
+    });
+
+    recalculate();
+}
+
+processBtn.addEventListener("click", async () => {
+    if (!imagesInput.files.length) {
+        showAlert("Please select at least one handwritten sheet image.");
+        return;
+    }
+
+    processingBox.style.display = "block";
+    processBtn.disabled = true;
+    resultSection.style.display = "none";
+
+    const form = new FormData();
+    Array.from(imagesInput.files).forEach(file => form.append("images", file));
+    form.append("rotation", document.getElementById("rotation").value);
+    form.append("working_date", paymentDate.value);
+
+    try {
+        const response = await fetch("/api/bulk-collection-ocr/process", {
+            method: "POST",
+            body: form
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "OCR processing failed.");
+
+        entries = (data.entries || []).map(e => ({...e, selected: e.validation === "VALID"}));
+        resultSection.style.display = "block";
+        renderTable();
+
+        if (!entries.length) {
+            showAlert("No collection entries were detected. Try another rotation or a clearer image.", "warning");
+        } else {
+            showAlert(`${entries.length} possible collection entries detected. Please verify the highlighted rows before uploading.`, "info");
+        }
+    } catch (err) {
+        showAlert(err.message || "OCR processing failed.");
+    } finally {
+        processingBox.style.display = "none";
+        processBtn.disabled = false;
+    }
+});
+
+uploadBtn.addEventListener("click", async () => {
+    const selected = entries
+        .filter(e => e.selected)
+        .map(e => ({
+            customer_reg_no: String(e.customer_reg_no || "").trim(),
+            amount: Number(e.amount || 0)
+        }))
+        .filter(e => e.customer_reg_no && e.amount > 0);
+
+    if (!selected.length) {
+        showAlert("There are no selected valid entries to upload.");
+        return;
+    }
+
+    const total = selected.reduce((sum, e) => sum + e.amount, 0);
+    if (!confirm(`Upload ${selected.length} collection entries totaling ₹${total.toLocaleString("en-IN")}?`)) {
+        return;
+    }
+
+    uploadBtn.disabled = true;
+
+    try {
+        const response = await fetch("/api/bulk-collection-ocr/upload", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                payment_date: paymentDate.value,
+                entries: selected
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok && !data.uploaded) {
+            throw new Error(data.error || data.message || "Bulk upload failed.");
+        }
+
+        showAlert(
+            `${data.message || "Upload completed."} Uploaded amount: ₹${Number(data.uploaded_amount || 0).toLocaleString("en-IN")}.`,
+            "success"
+        );
+
+        if (data.skipped && data.skipped.length) {
+            showAlert(
+                `${data.uploaded || 0} uploaded. ${data.skipped.length} skipped. Review the remaining rows before uploading them again.`,
+                "warning"
+            );
+        }
+
+        // Remove successfully uploaded rows from the current table.
+        const skippedIds = new Set((data.skipped || []).map(x => String(x.customer_reg_no)));
+        entries = entries.filter(e => !(e.selected && !skippedIds.has(String(e.customer_reg_no))));
+        renderTable();
+
+    } catch (err) {
+        showAlert(err.message || "Bulk upload failed.");
+    } finally {
+        uploadBtn.disabled = false;
+    }
+});
+
+clearBtn.addEventListener("click", () => {
+    imagesInput.value = "";
+    previewArea.innerHTML = "";
+    entries = [];
+    tableBody.innerHTML = "";
+    resultSection.style.display = "none";
+    document.getElementById("alertBox").innerHTML = "";
+});
+</script>
+</body>
+</html>
