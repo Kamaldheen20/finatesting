@@ -3,6 +3,7 @@
 # ==========================
 from datetime import datetime
 from sqlalchemy.exc import IntegrityError
+import re
 import os
 import secrets
 import logging
@@ -131,12 +132,7 @@ if not database_url:
     else:
         raise RuntimeError(error_msg)
 
-if database_url.startswith("postgresql://"):
-    database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-elif database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
-
-app.config["SQLALCHEMY_DATABASE_URI"] = database_url   # ← add this line back
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -947,6 +943,25 @@ def api_customer_amount_update_upload():
     })
 
 
+def _normalize_amount(raw):
+    """Best-effort clean-up of a CSV amount cell before float().
+
+    Accepts values like "1,000", "Rs. 500", "₹1000", " 250.50 ", or
+    "(200)" for a negative amount. Kept in sync with the client-side
+    normalizeAmountCell() in customer_amount_update.html so validation
+    and the actual save agree on what's a valid number, even if a row
+    reaches this endpoint without going through the browser's CSV parser.
+    """
+    s = str(raw if raw is not None else "").strip()
+    if not s:
+        return s
+    negative = s.startswith("(") and s.endswith(")")
+    s = re.sub(r"[^0-9.\-]", "", s)
+    if negative and not s.startswith("-"):
+        s = "-" + s
+    return s
+
+
 @app.route("/api/customer-amount-update/bulk-validate", methods=["POST"])
 @login_required
 def api_customer_amount_update_bulk_validate():
@@ -987,7 +1002,7 @@ def api_customer_amount_update_bulk_validate():
         amount = None
         if valid:
             try:
-                amount = float(raw_amount)
+                amount = float(_normalize_amount(raw_amount))
             except (ValueError, TypeError):
                 valid, message = False, "Amount is not a valid number."
             if valid and amount <= 0:
@@ -1057,7 +1072,7 @@ def api_customer_amount_update_bulk_upload():
             seen.add(customer_id)
 
             try:
-                amount = float((item or {}).get("amount", ""))
+                amount = float(_normalize_amount((item or {}).get("amount", "")))
             except (ValueError, TypeError):
                 raise ValueError(f"Invalid amount for {customer_id}.")
             if amount <= 0:
