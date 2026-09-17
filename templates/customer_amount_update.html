@@ -1054,6 +1054,59 @@
     bulkCsvMinimizedStatus.textContent = plainText || bulkCsvSummary.textContent || "Working…";
   }
 
+  // ------------------------------------------------------------------
+  // FIX (Bulk CSV "JSON error"): both bulk-validate and bulk-upload used
+  // to call res.json() unconditionally. If the server ever answered with
+  // something that wasn't JSON - an expired-session redirect to the HTML
+  // login page, a 413 "Request Entity Too Large" page for a big CSV, a
+  // proxy/gateway timeout page, or an unhandled 500 - res.json() threw a
+  // cryptic "Unexpected token '<', "<!DOCTYPE"... is not valid JSON"
+  // error instead of a useful message. This helper inspects the response
+  // before parsing and always throws a message a user can act on.
+  // ------------------------------------------------------------------
+  function safeParseJsonResponse(res) {
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+
+    return res.text().then(function (text) {
+      if (!contentType.includes("application/json")) {
+        if (res.status === 401 || res.status === 403 ||
+            /<form[^>]*id=["']?login/i.test(text) || /name=["']?password["']?/i.test(text)) {
+          throw new Error("Your session has expired. Please log in again and retry the upload.");
+        }
+        if (res.status === 413) {
+          throw new Error("That CSV file is too large to upload (25 MB limit). Split it into smaller files.");
+        }
+        if (res.status >= 500) {
+          throw new Error("Server error (" + res.status + ") while processing the CSV. Please try again.");
+        }
+        throw new Error(
+          "Server returned an unexpected response (" + res.status + "). Please try again."
+        );
+      }
+
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (e) {
+        throw new Error("Server returned a malformed response. Please try again.");
+      }
+
+      return { ok: res.ok, status: res.status, data: data };
+    });
+  }
+
+  // Turns messy real-world amount cells - "1,000", "₹1000", "Rs. 500",
+  // " 250.50 ", "(200)" for a negative/credit - into a plain number
+  // string the existing float() validation on the server can parse.
+  function normalizeAmountCell(raw) {
+    let s = String(raw == null ? "" : raw).trim();
+    if (!s) return s;
+    const negative = /^\(.*\)$/.test(s);
+    s = s.replace(/[^\d.\-]/g, "");
+    if (negative && s && s[0] !== "-") s = "-" + s;
+    return s;
+  }
+
   function parseCsvLine(line, delimiter) {
     const cells = [];
     let current = "";
@@ -1148,10 +1201,16 @@
       // registration or amount so the server can flag them during validation.
       if (cells.every(function (c) { return !String(c).trim(); })) continue;
 
+      // Ragged rows (fewer cells than the header, e.g. a trailing blank
+      // cell trimmed by Excel) used to silently read as undefined and
+      // fail later with a confusing message. Treat a missing cell as an
+      // empty string so it's reported as "Registration number is
+      // missing." / "Amount is not a valid number." by the server, same
+      // as any other bad row.
       rows.push({
         csv_row: i + 1,
         customer_id: (cells[regIndex] || "").trim(),
-        amount: (cells[amountIndex] || "").trim()
+        amount: normalizeAmountCell(cells[amountIndex])
       });
     }
 
@@ -1230,11 +1289,33 @@
         return;
       }
 
+      // Read as raw bytes first so we can sniff the encoding ourselves.
+      // Excel on Windows frequently exports CSVs as UTF-16 (with a BOM)
+      // or Windows-1252, not UTF-8 - reader.readAsText(file) alone assumes
+      // UTF-8 and silently mangles those into garbled/empty text, which
+      // then failed parseCsvText() with an unhelpful "no data rows" error.
+      function decodeCsvBytes(buffer) {
+        const bytes = new Uint8Array(buffer);
+        if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+          return new TextDecoder("utf-16le").decode(buffer);
+        }
+        if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+          return new TextDecoder("utf-16be").decode(buffer);
+        }
+        try {
+          return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        } catch (e) {
+          // Not valid UTF-8 - most likely a Windows-1252 / Latin-1 export.
+          return new TextDecoder("windows-1252").decode(buffer);
+        }
+      }
+
       const reader = new FileReader();
 
       reader.onload = function (event) {
         try {
-          bulkCsvRows = parseCsvText(event.target.result);
+          const text = decodeCsvBytes(event.target.result);
+          bulkCsvRows = parseCsvText(text);
 
           if (bulkCsvRows.length > 10000) {
             throw new Error("Maximum 10,000 CSV rows can be imported at once.");
@@ -1261,7 +1342,7 @@
         showBulkCsvAlert("Could not read the CSV file.", "danger");
       };
 
-      reader.readAsText(file);
+      reader.readAsArrayBuffer(file);
     });
   }
 
@@ -1330,11 +1411,7 @@
           };
         })
       })
-    }).then(function (res) {
-      return res.json().then(function (data) {
-        return { ok: res.ok, data: data };
-      });
-    }).then(function (result) {
+    }).then(safeParseJsonResponse).then(function (result) {
       if (!result.ok) {
         throw new Error(result.data.error || "Validation failed.");
       }
@@ -1406,11 +1483,7 @@
             };
           })
         })
-      }).then(function (res) {
-        return res.json().then(function (data) {
-          return { ok: res.ok, data: data };
-        });
-      }).then(function (result) {
+      }).then(safeParseJsonResponse).then(function (result) {
         if (!result.ok) {
           throw new Error(result.data.error || "Bulk upload failed.");
         }
