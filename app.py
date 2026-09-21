@@ -1220,6 +1220,79 @@ def api_customer_amount_update_delete():
     })
 
 
+@app.route("/api/customer-amount-update/delete-all", methods=["POST"])
+@login_required
+def api_customer_amount_update_delete_all():
+    """Delete all collection payments for the current user and working date."""
+    data = request.get_json(silent=True) or {}
+    payment_date = str(data.get("payment_date", "")).strip()
+
+    if not payment_date:
+        return jsonify({"error": "Working Date is missing."}), 400
+
+    try:
+        datetime.strptime(payment_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid Working Date."}), 400
+
+    try:
+        payments = Payment.query.filter_by(
+            payment_date=payment_date,
+            user_id=current_user.id
+        ).all()
+
+        if not payments:
+            return jsonify({
+                "success": True,
+                "deleted_count": 0,
+                "total_amount": 0,
+                "message": f"No collection entries found for {payment_date}."
+            })
+
+        customer_ids = list({p.customer_id for p in payments})
+        customers = Customer.query.filter(
+            Customer.customer_id.in_(customer_ids),
+            Customer.user_id == current_user.id
+        ).all()
+        customers_by_id = {c.customer_id: c for c in customers}
+
+        total_amount = 0
+        for payment in payments:
+            amount = float(payment.amount or 0)
+            total_amount += amount
+            customer = customers_by_id.get(payment.customer_id)
+            if customer:
+                customer.total_paid = max(0, (customer.total_paid or 0) - amount)
+
+        for customer in customers:
+            customer.remaining_balance = customer.loan_amount - customer.total_paid
+            if customer.remaining_balance <= 0:
+                customer.remaining_balance = 0
+                customer.status = "Closed"
+            else:
+                customer.status = "Active"
+
+        deleted_count = len(payments)
+        for payment in payments:
+            db.session.delete(payment)
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "deleted_count": deleted_count,
+            "total_amount": total_amount,
+            "message": f"Deleted {deleted_count} collection entr{'y' if deleted_count == 1 else 'ies'} for {payment_date}."
+        })
+
+    except Exception:
+        db.session.rollback()
+        logging.exception("Error deleting all collections via Customer Amount Update")
+        return jsonify({
+            "error": "Something went wrong while deleting the entries. No changes were saved."
+        }), 500
+
+
 # ==========================
 # COLLECTION SHEET
 # ==========================
