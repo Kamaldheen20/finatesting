@@ -119,6 +119,7 @@
           <h5 class="mb-0">Today's Collection Entries</h5>
           
           <button type="button" class="btn btn-outline-success" id="bulkCsvBtn">Bulk CSV</button>
+<button type="button" class="btn btn-outline-danger" id="deleteEntryBtn">Delete Entry</button>
 <button type="button" class="btn btn-primary" id="uploadAllBtn">Upload</button>
         </div>
 
@@ -212,6 +213,45 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         <button type="button" class="btn btn-success" id="bulkCsvUploadBtn" disabled>Upload Validated</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ==============================
+     DELETE MISINSERTED ENTRY MODAL
+     Removes the payment for the selected customer/date and reverses the
+     customer's total_paid / remaining_balance values.
+     ============================== -->
+<div class="modal fade" id="deleteEntryModal" tabindex="-1" aria-labelledby="deleteEntryModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="deleteEntryModalLabel">Delete Misinserted Data</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="deleteEntryAlertArea"></div>
+        <div class="alert alert-warning small">
+          Use this only when a payment was entered incorrectly. This deletes the
+          collection for the selected registration number and working date and
+          restores the customer's balance.
+        </div>
+        <label for="deleteEntryRegNo" class="form-label">Registration Number</label>
+        <input type="text" id="deleteEntryRegNo" class="form-control mb-3"
+               placeholder="Enter Reg No" autocomplete="off">
+        <div class="text-muted small mb-3">
+          Working Date: <strong id="deleteEntryDateLabel">-</strong>
+        </div>
+        <div id="deleteEntryDetails" class="d-none border rounded p-3 mb-2 bg-light">
+          <div><span class="text-muted">Name:</span> <strong id="deleteEntryName">-</strong></div>
+          <div><span class="text-muted">Amount:</span> <strong id="deleteEntryAmount">-</strong></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirmDeleteEntryBtn">Delete Entry</button>
       </div>
     </div>
   </div>
@@ -1035,6 +1075,111 @@
   const bulkCsvPreviewBody = document.getElementById("bulkCsvPreviewBody");
   const bulkCsvSummary = document.getElementById("bulkCsvSummary");
   const bulkCsvAlertArea = document.getElementById("bulkCsvAlertArea");
+  const deleteEntryModalEl = document.getElementById("deleteEntryModal");
+  const deleteEntryModal = deleteEntryModalEl ? new bootstrap.Modal(deleteEntryModalEl) : null;
+  const deleteEntryBtn = document.getElementById("deleteEntryBtn");
+  const deleteEntryRegNo = document.getElementById("deleteEntryRegNo");
+  const confirmDeleteEntryBtn = document.getElementById("confirmDeleteEntryBtn");
+  const deleteEntryAlertArea = document.getElementById("deleteEntryAlertArea");
+  const deleteEntryDetails = document.getElementById("deleteEntryDetails");
+  const deleteEntryName = document.getElementById("deleteEntryName");
+  const deleteEntryAmount = document.getElementById("deleteEntryAmount");
+  const deleteEntryDateLabel = document.getElementById("deleteEntryDateLabel");
+
+  function showDeleteEntryAlert(message, type) {
+    showAlert(message, type, deleteEntryAlertArea);
+  }
+
+  function resetDeleteEntryModal() {
+    deleteEntryRegNo.value = "";
+    deleteEntryDetails.classList.add("d-none");
+    deleteEntryName.textContent = "-";
+    deleteEntryAmount.textContent = "-";
+    deleteEntryDateLabel.textContent = workingDate || "-";
+    confirmDeleteEntryBtn.disabled = false;
+  }
+
+  deleteEntryBtn.addEventListener("click", function () {
+    resetDeleteEntryModal();
+    if (deleteEntryModal) deleteEntryModal.show();
+    setTimeout(function () { deleteEntryRegNo.focus(); }, 250);
+  });
+
+  confirmDeleteEntryBtn.addEventListener("click", function () {
+    const customerId = deleteEntryRegNo.value.normalize("NFC").trim();
+    if (!customerId) {
+      showDeleteEntryAlert("Enter a registration number.", "danger");
+      deleteEntryRegNo.focus();
+      return;
+    }
+
+    // If the row is already visible on this screen, reuse the displayed
+    // amount/name for a clearer confirmation. The server remains the source
+    // of truth and performs the actual deletion.
+    const state = rows[customerId];
+    if (state && state.uploaded) {
+      deleteEntryName.textContent = state.name || "-";
+      deleteEntryAmount.textContent = money(state.finalAmount || 0);
+      deleteEntryDetails.classList.remove("d-none");
+    }
+
+    if (!confirm("Delete the collection entry for " + customerId +
+                 " on " + workingDate + "? This will reverse the payment from the ledger.")) {
+      return;
+    }
+
+    confirmDeleteEntryBtn.disabled = true;
+
+    fetch("/api/customer-amount-update/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer_id: customerId,
+        payment_date: workingDate
+      })
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) {
+          data = { error: "Server returned an invalid response." };
+        }
+        return { ok: res.ok, data: data };
+      });
+    }).then(function (result) {
+      if (!result.ok) {
+        showDeleteEntryAlert(result.data.error || "Could not delete the entry.", "danger");
+        confirmDeleteEntryBtn.disabled = false;
+        return;
+      }
+
+      // Keep the current page in sync if the deleted entry is currently
+      // loaded here. The server has already reversed the financial totals.
+      const state = rows[customerId];
+      if (state) {
+        const removedAmount = parseFloat(state.finalAmount) || 0;
+        if (state.uploaded) {
+          todaysCustomers = Math.max(0, todaysCustomers - 1);
+          todaysTotal = Math.max(0, todaysTotal - removedAmount);
+        }
+        removeRowFromUI(customerId);
+      }
+
+      showAlert(result.data.message || ("Entry for " + customerId + " deleted successfully."), "success");
+      if (deleteEntryModal) deleteEntryModal.hide();
+    }).catch(function () {
+      showDeleteEntryAlert("Could not reach the server. Please try again.", "danger");
+      confirmDeleteEntryBtn.disabled = false;
+    });
+  });
+
+  deleteEntryRegNo.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmDeleteEntryBtn.click();
+    }
+  });
+
+
 
   // Small wrapper so every message from the bulk-CSV flow lands inside the
   // modal (visible) instead of the page's #alertArea (hidden behind the
