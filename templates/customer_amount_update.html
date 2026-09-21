@@ -120,6 +120,7 @@
           
           <button type="button" class="btn btn-outline-success" id="bulkCsvBtn">Bulk CSV</button>
 <button type="button" class="btn btn-outline-danger" id="deleteEntryBtn">Delete Entry</button>
+<button type="button" class="btn btn-danger" id="deleteAllEntriesBtn">Delete All</button>
 <button type="button" class="btn btn-primary" id="uploadAllBtn">Upload</button>
         </div>
 
@@ -1085,6 +1086,57 @@
   const deleteEntryName = document.getElementById("deleteEntryName");
   const deleteEntryAmount = document.getElementById("deleteEntryAmount");
   const deleteEntryDateLabel = document.getElementById("deleteEntryDateLabel");
+
+  const deleteAllEntriesBtn = document.getElementById("deleteAllEntriesBtn");
+
+  deleteAllEntriesBtn.addEventListener("click", function () {
+    const date = workingDate;
+    if (!confirm("DELETE ALL COLLECTION ENTRIES for " + date + "?\n\nThis will remove every payment entered for this working date and reverse the affected customer balances.\n\nThis cannot be undone automatically.")) {
+      return;
+    }
+
+    const typed = prompt('Type DELETE to confirm deleting all entries for ' + date + '.');
+    if (typed !== "DELETE") {
+      showAlert("Bulk delete cancelled. Nothing was deleted.", "info");
+      return;
+    }
+
+    deleteAllEntriesBtn.disabled = true;
+    deleteAllEntriesBtn.textContent = "Deleting...";
+
+    fetch("/api/customer-amount-update/delete-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_date: date })
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) {
+          data = { error: "Server returned an invalid response." };
+        }
+        return { ok: res.ok, data: data };
+      });
+    }).then(function (result) {
+      if (!result.ok) {
+        showAlert(result.data.error || "Bulk delete failed.", "danger");
+        return;
+      }
+
+      clearAllRowsUI();
+      try { localStorage.removeItem(storageKey()); } catch (e) {}
+
+      showAlert(
+        result.data.message || "All entries for the working date were deleted.",
+        "success"
+      );
+    }).catch(function () {
+      showAlert("Could not reach the server. Please try again.", "danger");
+    }).finally(function () {
+      deleteAllEntriesBtn.disabled = false;
+      deleteAllEntriesBtn.textContent = "Delete All";
+    });
+  });
+
 
   function showDeleteEntryAlert(message, type) {
     showAlert(message, type, deleteEntryAlertArea);
