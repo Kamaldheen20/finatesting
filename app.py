@@ -256,19 +256,20 @@ def _add_company_pdf_header(elements, normal_style, title, company=None):
         fontSize=14,
         leading=17,
         alignment=1,
-        textColor=colors.white,
+        textColor=colors.black,
         spaceAfter=0,
     )
-    # White title text is placed inside a dark header box so it remains
-    # readable in both screen preview and printed copies.
+    # Print-friendly title: white background with black text. This avoids
+    # the dark navy header consuming ink and makes the title clearly visible
+    # on normal office printers.
     title_box = Table(
         [[Paragraph(_pdf_text(title), title_style)]],
         colWidths=[None],
         hAlign="CENTER",
     )
     title_box.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1f2937")),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#111827")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#6b7280")),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 6),
