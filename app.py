@@ -1910,7 +1910,7 @@ def export_collection_pdf(month):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     elements.append(summary_table)
-    elements.append(Spacer(1, 12))
+    elements.append(Spacer(1, 6))
 
     def money(value):
         if value is None:
@@ -1939,13 +1939,36 @@ def export_collection_pdf(month):
     # substantially easier to read when printed.
     col_widths = [58, 150, 72] + [31] * 31 + [70, 72, 82, 58]
 
-    def build_chunk(rows):
+    def build_collection_table(rows, include_total=False):
+        """Build one continuous register table so ReportLab can flow it naturally.
+        This avoids artificial gaps between chunk tables and keeps the final
+        DAY TOTAL row inside the same bordered table."""
+        table_rows = [header_cells] + rows
+
+        if include_total:
+            total_row = [
+                Paragraph("<b>DAY TOTAL</b>", small_style),
+                "",
+                ""
+            ]
+            for day in range(1, 32):
+                total_row.append(money(day_totals.get(day, 0)))
+            total_row.extend([
+                money(month_total_all),
+                money(total_paid_all),
+                money(total_balance_all),
+                "-"
+            ])
+            table_rows.append(total_row)
+
         table = Table(
-            [header_cells] + rows,
+            table_rows,
             colWidths=col_widths,
             repeatRows=1,
-            hAlign="LEFT"
+            hAlign="LEFT",
+            splitByRow=1,
         )
+
         style_cmds = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -1955,16 +1978,30 @@ def export_collection_pdf(month):
             ("ALIGN", (2, 1), (-1, -1), "CENTER"),
             ("ALIGN", (0, 1), (1, -1), "LEFT"),
             ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]
+
         for i in range(1, len(rows) + 1):
             if i % 2 == 0:
-                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc")))
+                style_cmds.append(
+                    ("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc"))
+                )
+
+        if include_total:
+            total_idx = len(table_rows) - 1
+            style_cmds.extend([
+                ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#dcfce7")),
+                ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
+                ("TOPPADDING", (0, total_idx), (-1, total_idx), 4),
+                ("BOTTOMPADDING", (0, total_idx), (-1, total_idx), 4),
+                ("LINEABOVE", (0, total_idx), (-1, total_idx), 0.8, colors.HexColor("#374151")),
+            ])
+
         table.setStyle(TableStyle(style_cmds))
         return table
 
-    chunk = []
+    customer_rows = []
     for customer in customers:
         cust_payments = payments_by_customer.get(customer.customer_id, {})
         month_total = sum(float(cust_payments.get(day, 0) or 0) for day in range(1, 32))
@@ -1985,43 +2022,11 @@ def export_collection_pdf(month):
             money(customer.remaining_balance),
             Paragraph(_pdf_text(customer.status or ""), small_style),
         ])
-        chunk.append(row)
+        customer_rows.append(row)
 
-        if len(chunk) >= 45:
-            elements.append(build_chunk(chunk))
-            chunk = []
-            elements.append(PageBreak())
-
-    if chunk:
-        elements.append(build_chunk(chunk))
-
-    # Final daily totals are separated from customer rows for easy checking.
-    total_row = [
-        Paragraph("<b>DAY TOTAL</b>", small_style),
-        "",
-        ""
-    ]
-    for day in range(1, 32):
-        total_row.append(money(day_totals.get(day, 0)))
-    total_row.extend([
-        money(month_total_all),
-        money(total_paid_all),
-        money(total_balance_all),
-        "-"
-    ])
-
-    elements.append(Spacer(1, 10))
-    total_table = Table([total_row], colWidths=col_widths, hAlign="LEFT")
-    total_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#dcfce7")),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#4b5563")),
-        ("FONTNAME", (0, 0), (-1, -1), hdr_font),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-    elements.append(total_table)
+    # One continuous table lets ReportLab handle page breaks naturally.
+    # The header repeats on each page, without large artificial gaps.
+    elements.append(build_collection_table(customer_rows, include_total=True))
 
     def draw_footer(canvas, doc):
         canvas.saveState()
