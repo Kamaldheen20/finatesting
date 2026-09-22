@@ -1819,65 +1819,126 @@ def export_collection(month):
 @app.route("/export_collection_pdf/<month>")
 @login_required
 def export_collection_pdf(month):
-    """Generate a customer-friendly monthly collection PDF."""
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
+    """Generate the 31-day monthly collection register as an A4 landscape PDF.
+
+    Print layout:
+      Reg No | Customer Name | Loan | Days 1-31 | Month | Paid | Balance
+
+    The Status column is intentionally removed. All 31 collection days remain
+    on the same A4 landscape sheet, and daily amounts are rendered as compact
+    single-line values so digits do not wrap vertically.
+    """
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.pagesizes import landscape, A2
+    from reportlab.lib.pagesizes import landscape, A4
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from sqlalchemy import func, cast, Integer
     from collections import defaultdict
 
-    normal_font, bold_font, has_tamil = _register_tamil_font()
+    _register_tamil_font()
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        # The register is intentionally A2 landscape so all 31 collection-day
-        # columns plus Reg No, Name, Loan and summary columns stay inside the
-        # printable page instead of being clipped on the right.
-        pagesize=landscape(A2),
-        rightMargin=24,
-        leftMargin=24,
-        topMargin=28,
-        bottomMargin=28,
-        title=f"Monthly Collection Statement - {month}"
+        pagesize=landscape(A4),
+        rightMargin=14,
+        leftMargin=14,
+        topMargin=18,
+        bottomMargin=20,
+        title=f"Monthly Collection Register - {month}",
     )
-    styles = getSampleStyleSheet()
-    base_font = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[1]
-    hdr_font = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[2]
 
-    normal_style = ParagraphStyle(
-        "MonthlyNormal",
+    styles = getSampleStyleSheet()
+    font_cache = _FONT_CACHE.get(
+        "result",
+        ("Helvetica", "Helvetica", "Helvetica-Bold", False)
+    )
+    base_font = font_cache[1]
+    hdr_font = font_cache[2]
+
+    title_style = ParagraphStyle(
+        "MonthlyA4Title",
+        parent=styles["Normal"],
+        fontName=hdr_font,
+        fontSize=9.5,
+        leading=11,
+        alignment=TA_CENTER,
+        textColor=colors.black,
+        spaceAfter=0,
+    )
+    name_style = ParagraphStyle(
+        "MonthlyA4Name",
         parent=styles["Normal"],
         fontName=base_font,
-        fontSize=8.2,
-        leading=10,
+        fontSize=5.2,
+        leading=5.5,
         alignment=TA_LEFT,
+        textColor=colors.black,
     )
-    small_style = ParagraphStyle(
-        "MonthlySmall",
-        parent=normal_style,
-        fontSize=7,
-        leading=8,
+    head_style = ParagraphStyle(
+        "MonthlyA4Head",
+        parent=styles["Normal"],
+        fontName=hdr_font,
+        fontSize=4.2,
+        leading=4.5,
         alignment=TA_CENTER,
+        textColor=colors.black,
     )
-    elements = []
-    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Statement - {month}")
-    elements.append(Paragraph("Customer-friendly print copy", ParagraphStyle("PrintNote", parent=small_style, fontSize=7.5, textColor=colors.HexColor("#4b5563"), alignment=TA_CENTER)))
-    elements.append(Spacer(1, 5))
+    day_style = ParagraphStyle(
+        "MonthlyA4Day",
+        parent=styles["Normal"],
+        fontName=base_font,
+        fontSize=3.9,
+        leading=4.1,
+        alignment=TA_CENTER,
+        textColor=colors.black,
+    )
+    summary_style = ParagraphStyle(
+        "MonthlyA4Summary",
+        parent=styles["Normal"],
+        fontName=base_font,
+        fontSize=4.4,
+        leading=4.7,
+        alignment=TA_CENTER,
+        textColor=colors.black,
+    )
+    total_style = ParagraphStyle(
+        "MonthlyA4Total",
+        parent=styles["Normal"],
+        fontName=hdr_font,
+        fontSize=4.0,
+        leading=4.3,
+        alignment=TA_CENTER,
+        textColor=colors.black,
+    )
 
-    # A compact summary makes the PDF useful even when printed or viewed on a phone.
+    elements = []
+    _add_company_pdf_header(
+        elements,
+        ParagraphStyle(
+            "MonthlyA4CompanyBase",
+            parent=styles["Normal"],
+            fontName=base_font,
+            fontSize=8,
+            leading=9,
+            alignment=TA_CENTER,
+        ),
+        f"Monthly Collection Register - {month}",
+    )
+
+    # Use one compact register table. There is no artificial page split
+    # between sections; ReportLab repeats the two header rows automatically.
     day_expr = cast(func.substr(Payment.payment_date, 9, 2), Integer)
     payment_query = (
         db.session.query(
             Payment.customer_id,
             day_expr.label("day"),
-            func.sum(Payment.amount).label("day_total")
+            func.sum(Payment.amount).label("day_total"),
         )
         .filter(
             Payment.user_id == current_user.id,
-            Payment.payment_date.like(f"{month}%")
+            Payment.payment_date.like(f"{month}%"),
         )
         .group_by(Payment.customer_id, day_expr)
     )
@@ -1892,215 +1953,188 @@ def export_collection_pdf(month):
         day_totals[day] += value
         month_total_all += value
 
-    customers_query = (
+    customers = list(
         Customer.query
         .filter_by(user_id=current_user.id)
         .order_by(func.length(Customer.customer_id), Customer.customer_id)
         .yield_per(200)
     )
 
-    # Materialize only the compact customer summary needed for totals and tables.
-    customers = []
-    total_paid_all = 0.0
-    total_balance_all = 0.0
-    for customer in customers_query:
-        customers.append(customer)
-        total_paid_all += float(customer.total_paid or 0)
-        total_balance_all += float(customer.remaining_balance or 0)
-
-    summary_data = [[
-        Paragraph("<b>CUSTOMERS</b>", small_style),
-        Paragraph("<b>MONTH COLLECTION</b>", small_style),
-        Paragraph("<b>TOTAL PAID</b>", small_style),
-        Paragraph("<b>OUTSTANDING BALANCE</b>", small_style),
-    ], [
-        str(len(customers)),
-        f"Rs. {month_total_all:,.2f}",
-        f"Rs. {total_paid_all:,.2f}",
-        f"Rs. {total_balance_all:,.2f}",
-    ]]
-    summary_table = Table(summary_data, colWidths=[125, 175, 175, 200])
-    summary_table.setStyle(TableStyle([
-        # Keep the summary visually consistent with the rest of the
-        # print-friendly PDF: white background with black text.
-        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#9ca3af")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d1d5db")),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("FONTNAME", (0, 0), (-1, 0), hdr_font),
-        ("FONTNAME", (0, 1), (-1, 1), base_font),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    elements.append(summary_table)
-    elements.append(Spacer(1, 6))
+    total_paid_all = sum(float(c.total_paid or 0) for c in customers)
+    total_balance_all = sum(float(c.remaining_balance or 0) for c in customers)
 
     def money(value):
         if value is None:
             return "-"
-        value = float(value)
-        return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
+        number = float(value)
+        if number == int(number):
+            return f"₹{number:,.0f}"
+        return f"₹{number:,.2f}"
 
-    def money_cell(value):
-        # Plain strings are much lighter than thousands of Paragraph objects.
-        # The table's NotoSans font renders the Indian rupee symbol correctly.
-        return money(value)
+    def day_amount(value):
+        if value is None:
+            return "-"
+        number = float(value)
+        # Day cells deliberately omit the currency symbol. This keeps the
+        # 31 daily amounts on one line on A4 while preserving the exact value.
+        if number == int(number):
+            return f"{number:,.0f}"
+        return f"{number:,.2f}"
 
-    headers = ["Reg No", "Customer Name", "Loan"]
-    headers.extend([str(day) for day in range(1, 32)])
-    headers.extend(["Month", "Paid", "Balance", "Status"])
+    # Column widths are calculated for A4 landscape. The 31 daily columns
+    # are deliberately compact, while the customer name remains readable.
+    # Total width = 790.2pt, safely inside the printable A4 landscape width.
+    col_widths = (
+        [40, 92, 43]
+        + [15.2] * 31
+        + [45, 47, 52]
+    )
 
-    # Two-level header: identity/summary columns are clearly titled, while
-    # the 31 collection columns are grouped under "COLLECTION DATE".
     top_header = [
-        Paragraph("<b>Reg No</b>", small_style),
-        Paragraph("<b>Name</b>", small_style),
-        Paragraph("<b>Loan</b>", small_style),
-        Paragraph("<b>COLLECTION DATE</b>", small_style),
+        Paragraph("<b>Reg No</b>", head_style),
+        Paragraph("<b>Customer Name</b>", head_style),
+        Paragraph("<b>Loan</b>", head_style),
+        Paragraph("<b>COLLECTION DATE</b>", head_style),
     ] + [""] * 30 + [
-        Paragraph("<b>Month</b>", small_style),
-        Paragraph("<b>Paid</b>", small_style),
-        Paragraph("<b>Balance</b>", small_style),
-        Paragraph("<b>Status</b>", small_style),
+        Paragraph("<b>Month</b>", head_style),
+        Paragraph("<b>Paid</b>", head_style),
+        Paragraph("<b>Balance</b>", head_style),
     ]
 
-    day_header = ["", "", ""] + [
-        Paragraph(f"<b>{day}</b>", small_style) for day in range(1, 32)
-    ] + ["", "", "", ""]
+    day_header = (
+        ["", "", ""]
+        + [Paragraph(f"<b>{day}</b>", head_style) for day in range(1, 32)]
+        + ["", "", ""]
+    )
 
-    header_rows = [top_header, day_header]
+    table_rows = [top_header, day_header]
 
-    # The total width is 1,523 points. A2 landscape provides enough printable
-    # width for the complete register without clipping the right-side columns.
-    col_widths = [58, 150, 72] + [31] * 31 + [70, 72, 82, 58]
-
-    def build_collection_table(rows, include_total=False):
-        """Build one continuous register table with print-safe borders."""
-        table_rows = header_rows + rows
-
-        if include_total:
-            # Keep DAY TOTAL as one clear label spanning Reg No, Name and Loan.
-            total_row = [
-                Paragraph("<b>DAY TOTAL</b>", small_style),
-                "",
-                "",
-            ]
-            for day in range(1, 32):
-                total_row.append(money_cell(day_totals.get(day, 0)))
-            total_row.extend([
-                money_cell(month_total_all),
-                money_cell(total_paid_all),
-                money_cell(total_balance_all),
-                "-",
-            ])
-            table_rows.append(total_row)
-
-        table = Table(
-            table_rows,
-            colWidths=col_widths,
-            repeatRows=2,
-            hAlign="CENTER",
-            splitByRow=1,
-        )
-
-        style_cmds = [
-            # Clear two-level column headings.
-            ("BACKGROUND", (0, 0), (-1, 1), colors.white),
-            ("TEXTCOLOR", (0, 0), (-1, 1), colors.black),
-            ("FONTNAME", (0, 0), (-1, 1), hdr_font),
-            ("FONTSIZE", (0, 0), (-1, 1), 7),
-
-            # Merge the main labels vertically and the 31-day heading horizontally.
-            ("SPAN", (0, 0), (0, 1)),
-            ("SPAN", (1, 0), (1, 1)),
-            ("SPAN", (2, 0), (2, 1)),
-            ("SPAN", (3, 0), (33, 0)),
-            ("SPAN", (34, 0), (34, 1)),
-            ("SPAN", (35, 0), (35, 1)),
-            ("SPAN", (36, 0), (36, 1)),
-            ("SPAN", (37, 0), (37, 1)),
-
-            # Strong print-safe borders.
-            ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#374151")),
-            ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#111827")),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (0, 0), (-1, 1), "CENTER"),
-            ("ALIGN", (2, 2), (-1, -1), "CENTER"),
-            ("ALIGN", (0, 2), (1, -1), "LEFT"),
-            ("FONTNAME", (0, 2), (-1, -1), base_font),
-            ("FONTSIZE", (0, 2), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, 1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, 1), 3),
-            ("TOPPADDING", (0, 2), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 2), (-1, -1), 2),
-        ]
-
-        for i in range(2, 2 + len(rows)):
-            if i % 2 == 0:
-                style_cmds.append(
-                    ("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc"))
-                )
-
-        if include_total:
-            total_idx = len(table_rows) - 1
-
-            # Make the final total row unmistakable in printed copies:
-            # bold outer border + bold internal cell separators.
-            style_cmds.extend([
-                ("SPAN", (0, total_idx), (2, total_idx)),
-                ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#dcfce7")),
-                ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
-                ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
-                ("FONTSIZE", (0, total_idx), (-1, total_idx), 6.5),
-                ("ALIGN", (0, total_idx), (2, total_idx), "CENTER"),
-                ("VALIGN", (0, total_idx), (-1, total_idx), "MIDDLE"),
-                ("TOPPADDING", (0, total_idx), (-1, total_idx), 4),
-                ("BOTTOMPADDING", (0, total_idx), (-1, total_idx), 4),
-                ("BOX", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
-                ("INNERGRID", (0, total_idx), (-1, total_idx), 0.9, colors.HexColor("#374151")),
-                ("LINEABOVE", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
-                ("LINEBELOW", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
-            ])
-
-        table.setStyle(TableStyle(style_cmds))
-        return table
-
-    customer_rows = []
     for customer in customers:
         cust_payments = payments_by_customer.get(customer.customer_id, {})
-        month_total = sum(float(cust_payments.get(day, 0) or 0) for day in range(1, 32))
+        month_total = sum(
+            float(cust_payments.get(day, 0) or 0)
+            for day in range(1, 32)
+        )
 
         row = [
-            Paragraph(_pdf_text(str(customer.customer_id)), small_style),
-            Paragraph(_pdf_text(customer.name or ""), normal_style),
-            money_cell(customer.loan_amount),
+            Paragraph(_pdf_text(str(customer.customer_id)), summary_style),
+            Paragraph(_pdf_text(customer.name or ""), name_style),
+            Paragraph(_pdf_text(money(customer.loan_amount)), summary_style),
         ]
 
         for day in range(1, 32):
             amount = cust_payments.get(day)
-            row.append(money_cell(amount) if amount is not None else "-")
+            row.append(
+                Paragraph(_pdf_text(day_amount(amount)), day_style)
+                if amount is not None
+                else "-"
+            )
 
         row.extend([
-            money_cell(month_total),
-            money_cell(customer.total_paid),
-            money_cell(customer.remaining_balance),
-            Paragraph(_pdf_text(customer.status or ""), small_style),
+            Paragraph(_pdf_text(money(month_total)), summary_style),
+            Paragraph(_pdf_text(money(customer.total_paid)), summary_style),
+            Paragraph(_pdf_text(money(customer.remaining_balance)), summary_style),
         ])
-        customer_rows.append(row)
+        table_rows.append(row)
 
-    # One continuous table lets ReportLab handle page breaks naturally.
-    # The header repeats on each page, without large artificial gaps.
-    elements.append(build_collection_table(customer_rows, include_total=True))
+    # DAY TOTAL remains inside the same table and has no Status cell.
+    total_row = [
+        Paragraph("<b>DAY TOTAL</b>", total_style),
+        "",
+        "",
+    ]
+    for day in range(1, 32):
+        total_row.append(
+            Paragraph(
+                _pdf_text(day_amount(day_totals.get(day, 0))),
+                total_style,
+            )
+        )
+    total_row.extend([
+        Paragraph(_pdf_text(money(month_total_all)), total_style),
+        Paragraph(_pdf_text(money(total_paid_all)), total_style),
+        Paragraph(_pdf_text(money(total_balance_all)), total_style),
+    ])
+    table_rows.append(total_row)
 
-    def draw_footer(canvas, doc):
+    table = Table(
+        table_rows,
+        colWidths=col_widths,
+        repeatRows=2,
+        hAlign="CENTER",
+        splitByRow=1,
+    )
+
+    total_idx = len(table_rows) - 1
+
+    style_cmds = [
+        # White/black print layout.
+        ("BACKGROUND", (0, 0), (-1, 1), colors.white),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+
+        # Two-level header.
+        ("SPAN", (0, 0), (0, 1)),
+        ("SPAN", (1, 0), (1, 1)),
+        ("SPAN", (2, 0), (2, 1)),
+        ("SPAN", (3, 0), (33, 0)),
+        ("SPAN", (34, 0), (34, 1)),
+        ("SPAN", (35, 0), (35, 1)),
+        ("SPAN", (36, 0), (36, 1)),
+
+        # Strong but compact print grid.
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#374151")),
+        ("BOX", (0, 0), (-1, -1), 0.9, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 2), (1, -1), "LEFT"),
+
+        # Compact row sizing prevents vertical wrapping in day cells.
+        ("LEFTPADDING", (0, 0), (-1, -1), 0.8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0.8),
+        ("TOPPADDING", (0, 0), (-1, 1), 2.2),
+        ("BOTTOMPADDING", (0, 0), (-1, 1), 2.2),
+        ("TOPPADDING", (0, 2), (-1, -1), 1.7),
+        ("BOTTOMPADDING", (0, 2), (-1, -1), 1.7),
+
+        # Slightly stronger separators around the summary columns.
+        ("LINEBEFORE", (34, 0), (34, -1), 0.9, colors.black),
+        ("LINEBEFORE", (0, 0), (0, -1), 0.9, colors.black),
+        ("LINEAFTER", (36, 0), (36, -1), 0.9, colors.black),
+    ]
+
+    # Light alternating rows improve scanning without adding heavy ink.
+    for row_idx in range(2, 2 + len(customers)):
+        if (row_idx - 2) % 2 == 1:
+            style_cmds.append(
+                ("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#f8fafc"))
+            )
+
+    # The DAY TOTAL row is part of the same table and gets a strong border.
+    style_cmds.extend([
+        ("SPAN", (0, total_idx), (2, total_idx)),
+        ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.white),
+        ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
+        ("LINEABOVE", (0, total_idx), (-1, total_idx), 1.1, colors.black),
+        ("LINEBELOW", (0, total_idx), (-1, total_idx), 1.1, colors.black),
+        ("BOX", (0, total_idx), (-1, total_idx), 1.0, colors.black),
+        ("INNERGRID", (0, total_idx), (-1, total_idx), 0.5, colors.HexColor("#374151")),
+        ("TOPPADDING", (0, total_idx), (-1, total_idx), 2.5),
+        ("BOTTOMPADDING", (0, total_idx), (-1, total_idx), 2.5),
+    ])
+
+    table.setStyle(TableStyle(style_cmds))
+    elements.append(table)
+
+    def draw_footer(canvas, pdf_doc):
         canvas.saveState()
-        canvas.setFont(base_font, 7)
+        canvas.setFont(base_font, 6.5)
         canvas.setFillColor(colors.HexColor("#6b7280"))
-        canvas.drawString(24, 14, "Customer copy - Please retain this statement for your records.")
-        canvas.drawRightString(doc.pagesize[0] - 24, 14, f"Page {doc.page}")
+        canvas.drawString(14, 9, "Monthly Collection Register")
+        canvas.drawRightString(
+            pdf_doc.pagesize[0] - 14,
+            9,
+            f"Page {pdf_doc.page}",
+        )
         canvas.restoreState()
 
     db.session.expunge_all()
@@ -2111,9 +2145,8 @@ def export_collection_pdf(month):
         buffer,
         as_attachment=True,
         download_name=f"Monthly_Collection_{month}.pdf",
-        mimetype="application/pdf"
+        mimetype="application/pdf",
     )
-
 
 # ==========================
 # CUSTOMER LEDGER
