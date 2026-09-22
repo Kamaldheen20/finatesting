@@ -210,7 +210,8 @@ def _add_company_pdf_header(elements, normal_style, title, company=None):
     # ParagraphStyle is imported inside this helper because each PDF route
     # historically imported ReportLab styling classes locally.
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import Paragraph, Spacer
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
 
     company = company or _get_company_settings_for_pdf()
 
