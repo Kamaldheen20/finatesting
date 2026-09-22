@@ -962,6 +962,96 @@ def _normalize_amount(raw):
     return s
 
 
+@app.route("/api/customer-amount-update/add-customer", methods=["POST"])
+@login_required
+def api_customer_amount_update_add_customer():
+    data = request.get_json(silent=True) or {}
+
+    customer_id = str(data.get("customer_id", "")).strip()
+    name = str(data.get("name", "")).strip()
+    mobile = str(data.get("mobile", "")).strip()
+    address = str(data.get("address", "")).strip()
+    start_date = str(data.get("start_date", "")).strip()
+    end_date = str(data.get("end_date", "")).strip()
+
+    if not customer_id:
+        return jsonify({"error": "Registration number is required."}), 400
+    if not name:
+        return jsonify({"error": "Customer name is required."}), 400
+
+    try:
+        loan_amount = float(data.get("loan_amount", 0))
+        daily_due = float(data.get("daily_due", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Loan Amount and Daily Due must be valid numbers."}), 400
+
+    if loan_amount < 0 or daily_due < 0:
+        return jsonify({"error": "Loan Amount and Daily Due cannot be negative."}), 400
+
+    existing = Customer.query.filter_by(
+        customer_id=customer_id,
+        user_id=current_user.id
+    ).first()
+    if existing:
+        return jsonify({"error": f"Customer ID '{customer_id}' already exists."}), 409
+
+    if not end_date and start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            month = start_dt.month - 1 + 3
+            year = start_dt.year + month // 12
+            month = month % 12 + 1
+            day = min(start_dt.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+                                      31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+            end_dt = start_dt.replace(year=year, month=month, day=day)
+            end_date = end_dt.strftime("%Y-%m-%d")
+        except ValueError:
+            end_date = ""
+
+    customer = Customer(
+        customer_id=customer_id,
+        name=name,
+        mobile=mobile,
+        address=address,
+        loan_amount=loan_amount,
+        daily_due=daily_due,
+        total_paid=0,
+        remaining_balance=loan_amount,
+        status="Active",
+        start_date=start_date,
+        end_date=end_date,
+        user_id=current_user.id
+    )
+
+    try:
+        db.session.add(customer)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": f"Customer ID '{customer_id}' already exists."}), 409
+    except Exception:
+        db.session.rollback()
+        logger.exception("Error adding customer from bulk CSV validation")
+        return jsonify({"error": "Could not add the customer. Please try again."}), 500
+
+    return jsonify({
+        "success": True,
+        "customer": {
+            "customer_id": customer.customer_id,
+            "name": customer.name,
+            "mobile": customer.mobile,
+            "address": customer.address or "",
+            "loan_amount": customer.loan_amount,
+            "daily_due": customer.daily_due,
+            "remaining_balance": customer.remaining_balance,
+            "status": customer.status,
+            "start_date": customer.start_date or "",
+            "end_date": customer.end_date or ""
+        },
+        "message": f"Customer {customer.customer_id} added successfully."
+    })
+
+
 @app.route("/api/customer-amount-update/bulk-validate", methods=["POST"])
 @login_required
 def api_customer_amount_update_bulk_validate():
