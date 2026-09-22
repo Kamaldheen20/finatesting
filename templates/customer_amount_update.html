@@ -201,11 +201,12 @@
                 <th>Name</th>
                 <th>Amount</th>
                 <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="bulkCsvPreviewBody">
               <tr>
-                <td colspan="5" class="text-center text-muted py-4">Choose a CSV file to preview.</td>
+                <td colspan="6" class="text-center text-muted py-4">Choose a CSV file to preview.</td>
               </tr>
             </tbody>
           </table>
@@ -219,6 +220,38 @@
   </div>
 </div>
 
+
+<!-- ==============================
+     ADD MISSING CUSTOMER MODAL
+     ============================== -->
+<div class="modal fade" id="addMissingCustomerModal" tabindex="-1" aria-labelledby="addMissingCustomerModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="addMissingCustomerModalLabel">Add Missing Customer</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="addMissingCustomerAlertArea"></div>
+        <p class="small text-muted">The registration number and collection amount are taken from the CSV. Enter the customer details below, then validation will run again.</p>
+        <div class="row g-3">
+          <div class="col-md-6"><label class="form-label">Registration Number</label><input id="missingCustomerId" class="form-control" readonly></div>
+          <div class="col-md-6"><label class="form-label">Name *</label><input id="missingCustomerName" class="form-control"></div>
+          <div class="col-md-6"><label class="form-label">Mobile</label><input id="missingCustomerMobile" class="form-control"></div>
+          <div class="col-md-6"><label class="form-label">Address</label><input id="missingCustomerAddress" class="form-control"></div>
+          <div class="col-md-4"><label class="form-label">Loan Amount *</label><input id="missingCustomerLoan" type="number" min="0" step="0.01" class="form-control"></div>
+          <div class="col-md-4"><label class="form-label">Daily Due *</label><input id="missingCustomerDue" type="number" min="0" step="0.01" class="form-control"></div>
+          <div class="col-md-4"><label class="form-label">Start Date</label><input id="missingCustomerStart" type="date" class="form-control"></div>
+          <div class="col-md-4"><label class="form-label">End Date</label><input id="missingCustomerEnd" type="date" class="form-control"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-success" id="saveMissingCustomerBtn">Add Customer & Revalidate</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ==============================
      DELETE MISINSERTED ENTRY MODAL
@@ -1418,12 +1451,100 @@
     return rows;
   }
 
+  const addMissingCustomerModalEl = document.getElementById("addMissingCustomerModal");
+  const addMissingCustomerModal = addMissingCustomerModalEl ? new bootstrap.Modal(addMissingCustomerModalEl) : null;
+  const saveMissingCustomerBtn = document.getElementById("saveMissingCustomerBtn");
+  const addMissingCustomerAlertArea = document.getElementById("addMissingCustomerAlertArea");
+  const missingCustomerId = document.getElementById("missingCustomerId");
+  const missingCustomerName = document.getElementById("missingCustomerName");
+  const missingCustomerMobile = document.getElementById("missingCustomerMobile");
+  const missingCustomerAddress = document.getElementById("missingCustomerAddress");
+  const missingCustomerLoan = document.getElementById("missingCustomerLoan");
+  const missingCustomerDue = document.getElementById("missingCustomerDue");
+  const missingCustomerStart = document.getElementById("missingCustomerStart");
+  const missingCustomerEnd = document.getElementById("missingCustomerEnd");
+
+  function showMissingCustomerAlert(message, type) {
+    showAlert(message, type, addMissingCustomerAlertArea);
+  }
+
+  function openMissingCustomerModal(customerId, csvAmount) {
+    missingCustomerId.value = customerId || "";
+    missingCustomerName.value = "";
+    missingCustomerMobile.value = "";
+    missingCustomerAddress.value = "";
+    missingCustomerLoan.value = "";
+    missingCustomerDue.value = "";
+    missingCustomerStart.value = workingDate || "";
+    missingCustomerEnd.value = "";
+    saveMissingCustomerBtn.dataset.csvAmount = csvAmount || "";
+    addMissingCustomerAlertArea.innerHTML = "";
+    if (addMissingCustomerModal) addMissingCustomerModal.show();
+    setTimeout(function () { missingCustomerName.focus(); }, 250);
+  }
+
+  saveMissingCustomerBtn.addEventListener("click", function () {
+    const customerId = missingCustomerId.value.trim();
+    const name = missingCustomerName.value.trim();
+    const loanAmount = missingCustomerLoan.value.trim();
+    const dailyDue = missingCustomerDue.value.trim();
+
+    if (!customerId || !name) {
+      showMissingCustomerAlert("Registration number and customer name are required.", "danger");
+      return;
+    }
+    if (loanAmount === "" || dailyDue === "" || Number(loanAmount) < 0 || Number(dailyDue) < 0) {
+      showMissingCustomerAlert("Enter valid Loan Amount and Daily Due values.", "danger");
+      return;
+    }
+
+    saveMissingCustomerBtn.disabled = true;
+
+    fetch("/api/customer-amount-update/add-customer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer_id: customerId,
+        name: name,
+        mobile: missingCustomerMobile.value.trim(),
+        address: missingCustomerAddress.value.trim(),
+        loan_amount: loanAmount,
+        daily_due: dailyDue,
+        start_date: missingCustomerStart.value,
+        end_date: missingCustomerEnd.value
+      })
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        let data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) {
+          data = { error: "Server returned an invalid response." };
+        }
+        return { ok: res.ok, data: data };
+      });
+    }).then(function (result) {
+      if (!result.ok) {
+        showMissingCustomerAlert(result.data.error || "Could not add customer.", "danger");
+        return;
+      }
+
+      if (addMissingCustomerModal) addMissingCustomerModal.hide();
+      showBulkCsvAlert(result.data.message || "Customer added.", "success");
+      // Revalidate the original CSV so the new customer changes from
+      // "Customer not found" to "Ready" without re-selecting the file.
+      validateBulkCsv();
+    }).catch(function () {
+      showMissingCustomerAlert("Could not reach the server. Please try again.", "danger");
+    }).finally(function () {
+      saveMissingCustomerBtn.disabled = false;
+    });
+  });
+
   function renderBulkPreview(rows, serverValidation) {
     bulkCsvPreviewBody.innerHTML = "";
 
     if (!rows.length) {
       bulkCsvPreviewBody.innerHTML =
-        '<tr><td colspan="5" class="text-center text-muted py-4">No rows.</td></tr>';
+        '<tr><td colspan="6" class="text-center text-muted py-4">No rows.</td></tr>';
       return;
     }
 
@@ -1448,9 +1569,19 @@
         "<td>" + escapeHtml(result && result.name ? result.name : "-") + "</td>" +
         "<td>" + escapeHtml(row.amount) + "</td>" +
         "<td class='" + (result && result.valid ? "text-success fw-semibold" : "text-danger") + "'>" +
-        escapeHtml(status) + "</td>";
+        escapeHtml(status) + "</td>" +
+        "<td>" + ((result && !result.valid && result.message === "Customer not found.") ?
+          '<button type="button" class="btn btn-sm btn-outline-primary add-missing-customer-btn">Add Customer</button>' : "") +
+        "</td>";
 
       bulkCsvPreviewBody.appendChild(tr);
+
+      const addMissingBtn = tr.querySelector(".add-missing-customer-btn");
+      if (addMissingBtn && result) {
+        addMissingBtn.addEventListener("click", function () {
+          openMissingCustomerModal(result.customer_id, row.amount);
+        });
+      }
     });
   }
 
@@ -1463,7 +1594,7 @@
     setBulkCsvSummary("", "Waiting for a CSV file…");
     bulkCsvAlertArea.innerHTML = "";
     bulkCsvPreviewBody.innerHTML =
-      '<tr><td colspan="5" class="text-center text-muted py-4">Choose a CSV file to preview.</td></tr>';
+      '<tr><td colspan="6" class="text-center text-muted py-4">Choose a CSV file to preview.</td></tr>';
     hideBulkCsvMinimizedBar();
   }
 
