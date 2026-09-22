@@ -1790,65 +1790,58 @@ def export_collection(month):
 @app.route("/export_collection_pdf/<month>")
 @login_required
 def export_collection_pdf(month):
-    from reportlab.platypus import (
-        SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-    )
+    """Generate a customer-friendly monthly collection PDF."""
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.pagesizes import landscape, A3
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from sqlalchemy import func, cast, Integer
     from collections import defaultdict
 
-    # Register Tamil-capable font (cached globally after first call)
     normal_font, bold_font, has_tamil = _register_tamil_font()
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A3))
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A3),
+        rightMargin=24,
+        leftMargin=24,
+        topMargin=28,
+        bottomMargin=28,
+        title=f"Monthly Collection - {month}"
+    )
     styles = getSampleStyleSheet()
-
-    _reg = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))
-    base_font = _reg[1]   # NotoSans  (Latin)
-    hdr_font  = _reg[2]   # NotoSans-Bold
+    base_font = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[1]
+    hdr_font = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[2]
 
     normal_style = ParagraphStyle(
         "MonthlyNormal",
         parent=styles["Normal"],
         fontName=base_font,
-        fontSize=8
+        fontSize=8.2,
+        leading=10,
+        alignment=TA_LEFT,
+    )
+    small_style = ParagraphStyle(
+        "MonthlySmall",
+        parent=normal_style,
+        fontSize=7,
+        leading=8,
+        alignment=TA_CENTER,
+    )
+    amount_style = ParagraphStyle(
+        "MonthlyAmount",
+        parent=small_style,
+        fontSize=7.2,
+        leading=8,
     )
 
     elements = []
-    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Sheet - {month}")
+    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Register - {month}")
 
-    headers = ["ID", "Name", "Loan"]
-    for day in range(1, 32):
-        headers.append(str(day))
-    headers.extend(["Month Total", "Total Paid", "Balance", "Status"])
-
-    # OPTIMIZATION 1 - reuse a single TableStyle object for every chunk
-    # instead of rebuilding an identical TableStyle 100+ times.
-    row_style = TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-        ("FONTNAME", (0, 0), (-1, 0), bold_font),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ])
-
-    # =====================================================================
-    # OPTIMIZATION 2 - KILL THE N+1 QUERY
-    # The old code ran one Payment.query.filter_by(...).all() PER CUSTOMER
-    # (1000 customers = 1000+ round trips to Supabase - this alone is what
-    # was blowing up connections / time on Render). We instead pull every
-    # payment for this month ONCE, pre-aggregated (SUM + GROUP BY) inside
-    # Postgres itself, and build a small in-memory lookup dict:
-    #   payments_by_customer[customer_id][day] = total_amount_that_day
-    # This dict is tiny (at most 31 entries per customer who paid) compared
-    # to holding every raw Payment row in memory.
-    # =====================================================================
+    # A compact summary makes the PDF useful even when printed or viewed on a phone.
     day_expr = cast(func.substr(Payment.payment_date, 9, 2), Integer)
-
     payment_query = (
         db.session.query(
             Payment.customer_id,
@@ -1862,30 +1855,16 @@ def export_collection_pdf(month):
         .group_by(Payment.customer_id, day_expr)
     )
 
-    payments_by_customer = defaultdict(dict)   # {customer_id: {day: amount}}
-    day_totals = defaultdict(float)            # {day: total across ALL customers}
-    month_total_all = 0
+    payments_by_customer = defaultdict(dict)
+    day_totals = defaultdict(float)
+    month_total_all = 0.0
 
-    # OPTIMIZATION 3 - stream the aggregated rows instead of .all().
-    # yield_per() fetches in batches from the DB cursor rather than
-    # materializing the entire result set in Python memory at once.
     for cust_id, day, day_total in payment_query.yield_per(500):
-        payments_by_customer[cust_id][day] = day_total
-        day_totals[day] += day_total
-        month_total_all += day_total
+        value = float(day_total or 0)
+        payments_by_customer[cust_id][day] = value
+        day_totals[day] += value
+        month_total_all += value
 
-    # =====================================================================
-    # OPTIMIZATION 4 - NO sorted() ON QUERY RESULTS, LET POSTGRES ORDER BY
-    # The old code did Customer.query...yield_per(100) and then immediately
-    # threw away the streaming benefit by calling sorted() on it, which
-    # forces the ENTIRE result set into a Python list before sorting.
-    # For customer_id values that are numeric strings ("1", "2", ... "9999"),
-    # ORDER BY LENGTH(customer_id), customer_id in Postgres reproduces the
-    # exact same order as sorting by int(customer_id) in Python (shorter
-    # numeric strings always sort first, then lexicographically). This lets
-    # the database do the sort and lets us stream rows straight off the
-    # cursor with constant memory, regardless of 100 vs 10,000 customers.
-    # =====================================================================
     customers_query = (
         Customer.query
         .filter_by(user_id=current_user.id)
@@ -1893,96 +1872,156 @@ def export_collection_pdf(month):
         .yield_per(200)
     )
 
-    def flush_chunk(rows, include_header):
-        """
-        OPTIMIZATION 5 - CHUNKED TABLES + PAGE BREAKS INSTEAD OF ONE
-        GIANT TABLE.
-        A single ReportLab Table() holding thousands of rows keeps every
-        Paragraph/cell flowable alive in memory simultaneously while
-        doc.build() lays out pages - this is the #1 cause of the SIGKILL
-        / OOM crash on Render's free tier. Instead we build a small
-        Table() per 100 rows, append it to `elements`, and let Python's
-        GC reclaim the row list. Column layout, fonts, grid lines and
-        colors are identical to the original design.
-        """
-        chunk_data = ([headers] + rows) if include_header else rows
-        t = Table(chunk_data, repeatRows=1 if include_header else 0)
-        t.setStyle(row_style)
-        elements.append(t)
-
-    data_rows = []
-    row_count_in_chunk = 0
-    is_first_chunk = True
-    total_paid_all = 0
-    total_balance_all = 0
-
+    # Materialize only the compact customer summary needed for totals and tables.
+    customers = []
+    total_paid_all = 0.0
+    total_balance_all = 0.0
     for customer in customers_query:
-        # _pdf_text() switches font per-character: Tamil->NotoSansTamil, Latin->NotoSans
-        name_cell = Paragraph(_pdf_text(customer.name), normal_style)
-        row = [customer.customer_id, name_cell, customer.loan_amount]
+        customers.append(customer)
+        total_paid_all += float(customer.total_paid or 0)
+        total_balance_all += float(customer.remaining_balance or 0)
 
+    summary_data = [[
+        Paragraph("<b>CUSTOMERS</b>", small_style),
+        Paragraph("<b>MONTH COLLECTION</b>", small_style),
+        Paragraph("<b>TOTAL PAID</b>", small_style),
+        Paragraph("<b>OUTSTANDING BALANCE</b>", small_style),
+    ], [
+        str(len(customers)),
+        f"₹{month_total_all:,.2f}",
+        f"₹{total_paid_all:,.2f}",
+        f"₹{total_balance_all:,.2f}",
+    ]]
+    summary_table = Table(summary_data, colWidths=[125, 175, 175, 200])
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f3f4f6")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#9ca3af")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d1d5db")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 0), (-1, 0), hdr_font),
+        ("FONTNAME", (0, 1), (-1, 1), base_font),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 12))
+
+    def money(value):
+        if value is None:
+            return "-"
+        value = float(value)
+        return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
+
+    headers = ["Reg No", "Customer Name", "Loan"]
+    headers.extend([str(day) for day in range(1, 32)])
+    headers.extend(["Month", "Paid", "Balance", "Status"])
+
+    header_cells = [
+        Paragraph("<b>Reg No</b>", small_style),
+        Paragraph("<b>Customer Name</b>", small_style),
+        Paragraph("<b>Loan</b>", small_style),
+    ]
+    header_cells += [Paragraph(f"<b>{day}</b>", small_style) for day in range(1, 32)]
+    header_cells += [
+        Paragraph("<b>Month</b>", small_style),
+        Paragraph("<b>Paid</b>", small_style),
+        Paragraph("<b>Balance</b>", small_style),
+        Paragraph("<b>Status</b>", small_style),
+    ]
+
+    # Narrow date columns and wider identity/summary columns make the register
+    # substantially easier to read when printed.
+    col_widths = [58, 150, 72] + [31] * 31 + [70, 72, 82, 58]
+
+    def build_chunk(rows):
+        table = Table(
+            [header_cells] + rows,
+            colWidths=col_widths,
+            repeatRows=1,
+            hAlign="LEFT"
+        )
+        style_cmds = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), hdr_font),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (2, 1), (-1, -1), "CENTER"),
+            ("ALIGN", (0, 1), (1, -1), "LEFT"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]
+        for i in range(1, len(rows) + 1):
+            if i % 2 == 0:
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc")))
+        table.setStyle(TableStyle(style_cmds))
+        return table
+
+    chunk = []
+    for customer in customers:
         cust_payments = payments_by_customer.get(customer.customer_id, {})
-        month_total = 0
+        month_total = sum(float(cust_payments.get(day, 0) or 0) for day in range(1, 32))
+
+        row = [
+            Paragraph(_pdf_text(str(customer.customer_id)), small_style),
+            Paragraph(_pdf_text(customer.name or ""), normal_style),
+            money(customer.loan_amount),
+        ]
+
         for day in range(1, 32):
-            amt = cust_payments.get(day)
-            if amt is None:
-                row.append("-")
-            else:
-                row.append(amt)
-                month_total += amt
+            amount = cust_payments.get(day)
+            row.append(money(amount) if amount is not None else "-")
 
         row.extend([
-            month_total,
-            customer.total_paid,
-            customer.remaining_balance,
-            customer.status
+            money(month_total),
+            money(customer.total_paid),
+            money(customer.remaining_balance),
+            Paragraph(_pdf_text(customer.status or ""), small_style),
         ])
-        data_rows.append(row)
-        row_count_in_chunk += 1
+        chunk.append(row)
 
-        total_paid_all += customer.total_paid or 0
-        total_balance_all += customer.remaining_balance or 0
-
-        # OPTIMIZATION 6 - flush + PageBreak every 100 rows so no single
-        # Table() or in-memory list ever holds more than 100 rows.
-        if row_count_in_chunk == 100:
-            flush_chunk(data_rows, include_header=is_first_chunk)
+        if len(chunk) >= 45:
+            elements.append(build_chunk(chunk))
+            chunk = []
             elements.append(PageBreak())
-            data_rows = []          # release the chunk, don't accumulate
-            row_count_in_chunk = 0
-            is_first_chunk = False
 
-    # Flush the final partial chunk (< 100 rows)
-    if data_rows:
-        flush_chunk(data_rows, include_header=is_first_chunk)
-        data_rows = []
+    if chunk:
+        elements.append(build_chunk(chunk))
 
-    # OPTIMIZATION 7 - DAY TOTAL ROW built entirely from the aggregates
-    # computed during the single streaming pass above (no second
-    # Payment.query.filter_by(...).all() needed, unlike the original).
-    total_row = ["DAY TOTAL", "", ""]
+    # Final daily totals are separated from customer rows for easy checking.
+    total_row = [
+        Paragraph("<b>DAY TOTAL</b>", small_style),
+        "",
+        ""
+    ]
     for day in range(1, 32):
-        total_row.append(day_totals.get(day, 0))
-    total_row.extend([month_total_all, total_paid_all, total_balance_all, "-"])
+        total_row.append(money(day_totals.get(day, 0)))
+    total_row.extend([
+        money(month_total_all),
+        money(total_paid_all),
+        money(total_balance_all),
+        "-"
+    ])
 
-    total_table = Table([total_row])
+    elements.append(Spacer(1, 10))
+    total_table = Table([total_row], colWidths=col_widths, hAlign="LEFT")
     total_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.lightgreen),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-        ("FONTNAME", (0, 0), (-1, -1), bold_font),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#dcfce7")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#4b5563")),
+        ("FONTNAME", (0, 0), (-1, -1), hdr_font),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     elements.append(total_table)
 
-    # OPTIMIZATION 8 - release the SQLAlchemy identity map. After
-    # streaming thousands of Customer objects, the Session still holds
-    # references to all of them. expunge_all() detaches them so they can
-    # be garbage-collected before/while doc.build() does its (memory
-    # heavier) layout pass.
     db.session.expunge_all()
-
     doc.build(elements)
     buffer.seek(0)
 
