@@ -113,6 +113,34 @@ class Customer(db.Model):
 # PAYMENT TABLE
 # ==========================
 
+class PendingCustomer(db.Model):
+    """Pending collection rows whose customer was not found during CSV validation."""
+    __tablename__ = "pending_customers"
+    __table_args__ = (
+        db.UniqueConstraint("customer_id", "payment_date", "user_id",
+                            name="uq_pending_customer_user_date"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.String(50), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0)
+    payment_date = db.Column(db.String(50), nullable=False)
+    reason = db.Column(db.String(255), nullable=False, default="Customer not found")
+    name = db.Column(db.String(200), default="")
+    mobile = db.Column(db.String(20), default="")
+    address = db.Column(db.Text, default="")
+    loan_amount = db.Column(db.Float, default=0)
+    daily_due = db.Column(db.Float, default=0)
+    start_date = db.Column(db.String(50), default="")
+    end_date = db.Column(db.String(50), default="")
+    user_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=False)
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, default=db.func.now(), onupdate=db.func.now(), nullable=False)
+
+
+# ==========================
+# PAYMENT TABLE
+# ==========================
+
 class Payment(db.Model):
     __tablename__ = "payments"
 
