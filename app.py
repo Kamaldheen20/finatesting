@@ -1794,7 +1794,7 @@ def export_collection_pdf(month):
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.pagesizes import landscape, A3
+    from reportlab.lib.pagesizes import landscape, A2
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from sqlalchemy import func, cast, Integer
     from collections import defaultdict
@@ -1804,7 +1804,10 @@ def export_collection_pdf(month):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(A3),
+        # The register is intentionally A2 landscape so all 31 collection-day
+        # columns plus Reg No, Name, Loan and summary columns stay inside the
+        # printable page instead of being clipped on the right.
+        pagesize=landscape(A2),
         rightMargin=24,
         leftMargin=24,
         topMargin=28,
@@ -1922,29 +1925,36 @@ def export_collection_pdf(month):
     headers.extend([str(day) for day in range(1, 32)])
     headers.extend(["Month", "Paid", "Balance", "Status"])
 
-    header_cells = [
+    # Two-level header: identity/summary columns are clearly titled, while
+    # the 31 collection columns are grouped under "COLLECTION DATE".
+    top_header = [
         Paragraph("<b>Reg No</b>", small_style),
-        Paragraph("<b>Customer Name</b>", small_style),
+        Paragraph("<b>Name</b>", small_style),
         Paragraph("<b>Loan</b>", small_style),
-    ]
-    header_cells += [Paragraph(f"<b>{day}</b>", small_style) for day in range(1, 32)]
-    header_cells += [
+        Paragraph("<b>COLLECTION DATE</b>", small_style),
+    ] + [""] * 30 + [
         Paragraph("<b>Month</b>", small_style),
         Paragraph("<b>Paid</b>", small_style),
         Paragraph("<b>Balance</b>", small_style),
         Paragraph("<b>Status</b>", small_style),
     ]
 
-    # Narrow date columns and wider identity/summary columns make the register
-    # substantially easier to read when printed.
+    day_header = ["", "", ""] + [
+        Paragraph(f"<b>{day}</b>", small_style) for day in range(1, 32)
+    ] + ["", "", "", ""]
+
+    header_rows = [top_header, day_header]
+
+    # The total width is 1,523 points. A2 landscape provides enough printable
+    # width for the complete register without clipping the right-side columns.
     col_widths = [58, 150, 72] + [31] * 31 + [70, 72, 82, 58]
 
     def build_collection_table(rows, include_total=False):
         """Build one continuous register table with print-safe borders."""
-        table_rows = [header_cells] + rows
+        table_rows = header_rows + rows
 
         if include_total:
-            # Keep DAY TOTAL as one clear label spanning Reg No, Customer and Loan.
+            # Keep DAY TOTAL as one clear label spanning Reg No, Name and Loan.
             total_row = [
                 Paragraph("<b>DAY TOTAL</b>", small_style),
                 "",
@@ -1963,27 +1973,43 @@ def export_collection_pdf(month):
         table = Table(
             table_rows,
             colWidths=col_widths,
-            repeatRows=1,
-            hAlign="LEFT",
+            repeatRows=2,
+            hAlign="CENTER",
             splitByRow=1,
         )
 
         style_cmds = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), hdr_font),
+            # Clear two-level column headings.
+            ("BACKGROUND", (0, 0), (-1, 1), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 1), colors.white),
+            ("FONTNAME", (0, 0), (-1, 1), hdr_font),
+            ("FONTSIZE", (0, 0), (-1, 1), 7),
 
-            # Stronger borders throughout so figures remain separated on print.
-            ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#4b5563")),
+            # Merge the main labels vertically and the 31-day heading horizontally.
+            ("SPAN", (0, 0), (0, 1)),
+            ("SPAN", (1, 0), (1, 1)),
+            ("SPAN", (2, 0), (2, 1)),
+            ("SPAN", (3, 0), (33, 0)),
+            ("SPAN", (34, 0), (34, 1)),
+            ("SPAN", (35, 0), (35, 1)),
+            ("SPAN", (36, 0), (36, 1)),
+            ("SPAN", (37, 0), (37, 1)),
+
+            # Strong print-safe borders.
+            ("GRID", (0, 0), (-1, -1), 0.65, colors.HexColor("#374151")),
+            ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#111827")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (2, 1), (-1, -1), "CENTER"),
-            ("ALIGN", (0, 1), (1, -1), "LEFT"),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("ALIGN", (0, 0), (-1, 1), "CENTER"),
+            ("ALIGN", (2, 2), (-1, -1), "CENTER"),
+            ("ALIGN", (0, 2), (1, -1), "LEFT"),
+            ("FONTSIZE", (0, 2), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, 1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, 1), 3),
+            ("TOPPADDING", (0, 2), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 2), (-1, -1), 2),
         ]
 
-        for i in range(1, len(rows) + 1):
+        for i in range(2, 2 + len(rows)):
             if i % 2 == 0:
                 style_cmds.append(
                     ("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc"))
@@ -2044,7 +2070,7 @@ def export_collection_pdf(month):
         canvas.setFont(base_font, 7)
         canvas.setFillColor(colors.HexColor("#6b7280"))
         canvas.drawString(24, 14, "Customer copy - Please retain this statement for your records.")
-        canvas.drawRightString(1180, 14, f"Page {doc.page}")
+        canvas.drawRightString(doc.pagesize[0] - 24, 14, f"Page {doc.page}")
         canvas.restoreState()
 
     db.session.expunge_all()
