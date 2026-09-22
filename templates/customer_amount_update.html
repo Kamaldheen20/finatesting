@@ -58,7 +58,10 @@
   <!-- Header -->
   <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
     <h2 class="mb-0 fs-4">Customer Amount Update</h2>
-    <a href="/dashboard" class="btn btn-outline-dark btn-sm">&larr; Dashboard</a>
+    <div class="d-flex gap-2">
+      <a href="/pending-customers" class="btn btn-outline-warning btn-sm">Pending Customers</a>
+      <a href="/dashboard" class="btn btn-outline-dark btn-sm">&larr; Dashboard</a>
+    </div>
   </div>
 
   <!-- Alert area for feedback -->
@@ -233,7 +236,7 @@
       </div>
       <div class="modal-body">
         <div id="addMissingCustomerAlertArea"></div>
-        <p class="small text-muted">The registration number and collection amount are taken from the CSV. Enter the customer details below, then validation will run again.</p>
+        <p class="small text-muted">Missing customers are saved in <strong>Pending Customers</strong>. Use that page to add them separately and apply their saved collection amount.</p>
         <div class="row g-3">
           <div class="col-md-6"><label class="form-label">Registration Number</label><input id="missingCustomerId" class="form-control" readonly></div>
           <div class="col-md-6"><label class="form-label">Name *</label><input id="missingCustomerName" class="form-control"></div>
@@ -247,7 +250,8 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-success" id="saveMissingCustomerBtn">Add Customer & Revalidate</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <a href="/pending-customers" class="btn btn-warning">Open Pending Customers</a>
       </div>
     </div>
   </div>
@@ -1483,61 +1487,7 @@
     setTimeout(function () { missingCustomerName.focus(); }, 250);
   }
 
-  saveMissingCustomerBtn.addEventListener("click", function () {
-    const customerId = missingCustomerId.value.trim();
-    const name = missingCustomerName.value.trim();
-    const loanAmount = missingCustomerLoan.value.trim();
-    const dailyDue = missingCustomerDue.value.trim();
-
-    if (!customerId || !name) {
-      showMissingCustomerAlert("Registration number and customer name are required.", "danger");
-      return;
-    }
-    if (loanAmount === "" || dailyDue === "" || Number(loanAmount) < 0 || Number(dailyDue) < 0) {
-      showMissingCustomerAlert("Enter valid Loan Amount and Daily Due values.", "danger");
-      return;
-    }
-
-    saveMissingCustomerBtn.disabled = true;
-
-    fetch("/api/customer-amount-update/add-customer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customer_id: customerId,
-        name: name,
-        mobile: missingCustomerMobile.value.trim(),
-        address: missingCustomerAddress.value.trim(),
-        loan_amount: loanAmount,
-        daily_due: dailyDue,
-        start_date: missingCustomerStart.value,
-        end_date: missingCustomerEnd.value
-      })
-    }).then(function (res) {
-      return res.text().then(function (text) {
-        let data = {};
-        try { data = text ? JSON.parse(text) : {}; } catch (e) {
-          data = { error: "Server returned an invalid response." };
-        }
-        return { ok: res.ok, data: data };
-      });
-    }).then(function (result) {
-      if (!result.ok) {
-        showMissingCustomerAlert(result.data.error || "Could not add customer.", "danger");
-        return;
-      }
-
-      if (addMissingCustomerModal) addMissingCustomerModal.hide();
-      showBulkCsvAlert(result.data.message || "Customer added.", "success");
-      // Revalidate the original CSV so the new customer changes from
-      // "Customer not found" to "Ready" without re-selecting the file.
-      validateBulkCsv();
-    }).catch(function () {
-      showMissingCustomerAlert("Could not reach the server. Please try again.", "danger");
-    }).finally(function () {
-      saveMissingCustomerBtn.disabled = false;
-    });
-  });
+  // Missing customers are persisted during validation and handled on Pending Customers.
 
   function renderBulkPreview(rows, serverValidation) {
     bulkCsvPreviewBody.innerHTML = "";
@@ -1571,7 +1521,7 @@
         "<td class='" + (result && result.valid ? "text-success fw-semibold" : "text-danger") + "'>" +
         escapeHtml(status) + "</td>" +
         "<td>" + ((result && !result.valid && result.message === "Customer not found.") ?
-          '<button type="button" class="btn btn-sm btn-outline-primary add-missing-customer-btn">Add Customer</button>' : "") +
+          '<a href="/pending-customers" class="btn btn-sm btn-outline-warning">Pending</a>' : "") +
         "</td>";
 
       bulkCsvPreviewBody.appendChild(tr);
@@ -1754,22 +1704,19 @@
         result.data.valid_count + " valid, " + result.data.invalid_count + " invalid"
       );
 
-      if (result.data.invalid_count > 0) {
-        bulkCsvUploadBtn.disabled = true;
-        bulkCsvUploadBtn.textContent = "Fix CSV Errors";
+      if (result.data.valid_count > 0) {
+        bulkCsvUploadBtn.disabled = false;
+        bulkCsvUploadBtn.textContent = "Upload Valid Customers";
         showBulkCsvAlert(
-          result.data.invalid_count +
-          " row(s) need correction. The CSV will NOT be uploaded until all rows are valid.",
-          "warning"
+          result.data.invalid_count > 0
+            ? (result.data.invalid_count + " row(s) are pending. Upload the valid rows now; add pending customers separately.")
+            : (result.data.valid_count + " row(s) validated successfully."),
+          result.data.invalid_count > 0 ? "warning" : "success"
         );
       } else {
-        bulkCsvUploadBtn.disabled = false;
-        bulkCsvUploadBtn.textContent = "Upload Validated";
-        showBulkCsvAlert(
-          result.data.valid_count +
-          " row(s) validated successfully. Click Upload Validated to save them.",
-          "success"
-        );
+        bulkCsvUploadBtn.disabled = true;
+        bulkCsvUploadBtn.textContent = "No Valid Customers";
+        showBulkCsvAlert("No valid customer rows are ready. Missing customers were saved to Pending Customers.", "warning");
       }
     }).catch(function (err) {
       bulkCsvValidation = null;
@@ -1804,11 +1751,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           working_date: workingDate,
-          rows: bulkCsvRows.map(function (row) {
-            return {
-              customer_id: row.customer_id,
-              amount: row.amount
-            };
+          rows: bulkCsvRows.filter(function (row) {
+            const result = bulkCsvValidation.rows.find(function (item) {
+              return Number(item.row) === Number(row.csv_row);
+            });
+            return result && result.valid;
+          }).map(function (row) {
+            return { customer_id: row.customer_id, amount: row.amount };
           })
         })
       }).then(safeParseJsonResponse).then(function (result) {
@@ -1820,8 +1769,9 @@
         const total = Number(result.data.total_amount || 0);
 
         showAlert(
-          count + " payment(s) uploaded successfully (" + money(total) + ").",
-          "success"
+          count + " valid payment(s) uploaded successfully (" + money(total) + ")." +
+          (bulkCsvValidation.invalid_count > 0 ? " Missing customers remain in Pending Customers." : ""),
+          bulkCsvValidation.invalid_count > 0 ? "warning" : "success"
         );
 
         // Mark the matching rows already sitting in the entries panel as
