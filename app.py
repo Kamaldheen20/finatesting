@@ -134,6 +134,17 @@ if not database_url:
 
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 
+# Recycle stale Supabase/PostgreSQL SSL connections and validate pooled
+# connections before reuse. This prevents intermittent "bad record mac"
+# errors after Render workers have been idle.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "pool_timeout": 30,
+    "pool_size": 2,
+    "max_overflow": 1,
+}
+
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
@@ -1850,13 +1861,6 @@ def export_collection_pdf(month):
         leading=8,
         alignment=TA_CENTER,
     )
-    amount_style = ParagraphStyle(
-        "MonthlyAmount",
-        parent=small_style,
-        fontSize=7.2,
-        leading=8,
-    )
-
     elements = []
     _add_company_pdf_header(elements, normal_style, f"Monthly Collection Statement - {month}")
     elements.append(Paragraph("Customer-friendly print copy", ParagraphStyle("PrintNote", parent=small_style, fontSize=7.5, textColor=colors.HexColor("#4b5563"), alignment=TA_CENTER)))
@@ -1939,7 +1943,9 @@ def export_collection_pdf(month):
         return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
 
     def money_cell(value):
-        return Paragraph(_pdf_text(money(value)), amount_style)
+        # Plain strings are much lighter than thousands of Paragraph objects.
+        # The table's NotoSans font renders the Indian rupee symbol correctly.
+        return money(value)
 
     headers = ["Reg No", "Customer Name", "Loan"]
     headers.extend([str(day) for day in range(1, 32)])
@@ -2022,6 +2028,7 @@ def export_collection_pdf(month):
             ("ALIGN", (0, 0), (-1, 1), "CENTER"),
             ("ALIGN", (2, 2), (-1, -1), "CENTER"),
             ("ALIGN", (0, 2), (1, -1), "LEFT"),
+            ("FONTNAME", (0, 2), (-1, -1), base_font),
             ("FONTSIZE", (0, 2), (-1, -1), 7),
             ("TOPPADDING", (0, 0), (-1, 1), 3),
             ("BOTTOMPADDING", (0, 0), (-1, 1), 3),
@@ -2043,6 +2050,7 @@ def export_collection_pdf(month):
             style_cmds.extend([
                 ("SPAN", (0, total_idx), (2, total_idx)),
                 ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#dcfce7")),
+                ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
                 ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
                 ("FONTSIZE", (0, total_idx), (-1, total_idx), 6.5),
                 ("ALIGN", (0, total_idx), (2, total_idx), "CENTER"),
@@ -2071,7 +2079,7 @@ def export_collection_pdf(month):
 
         for day in range(1, 32):
             amount = cust_payments.get(day)
-            row.append(money_cell(amount) if amount is not None else Paragraph("-", amount_style))
+            row.append(money_cell(amount) if amount is not None else "-")
 
         row.extend([
             money_cell(month_total),
