@@ -1809,7 +1809,7 @@ def export_collection_pdf(month):
         leftMargin=24,
         topMargin=28,
         bottomMargin=28,
-        title=f"Monthly Collection - {month}"
+        title=f"Monthly Collection Statement - {month}"
     )
     styles = getSampleStyleSheet()
     base_font = _FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[1]
@@ -1838,7 +1838,9 @@ def export_collection_pdf(month):
     )
 
     elements = []
-    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Register - {month}")
+    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Statement - {month}")
+    elements.append(Paragraph("Customer-friendly print copy", ParagraphStyle("PrintNote", parent=small_style, fontSize=7.5, textColor=colors.HexColor("#4b5563"), alignment=TA_CENTER)))
+    elements.append(Spacer(1, 5))
 
     # A compact summary makes the PDF useful even when printed or viewed on a phone.
     day_expr = cast(func.substr(Payment.payment_date, 9, 2), Integer)
@@ -1888,9 +1890,9 @@ def export_collection_pdf(month):
         Paragraph("<b>OUTSTANDING BALANCE</b>", small_style),
     ], [
         str(len(customers)),
-        f"₹{month_total_all:,.2f}",
-        f"₹{total_paid_all:,.2f}",
-        f"₹{total_balance_all:,.2f}",
+        f"Rs. {month_total_all:,.2f}",
+        f"Rs. {total_paid_all:,.2f}",
+        f"Rs. {total_balance_all:,.2f}",
     ]]
     summary_table = Table(summary_data, colWidths=[125, 175, 175, 200])
     summary_table.setStyle(TableStyle([
@@ -1914,7 +1916,7 @@ def export_collection_pdf(month):
         if value is None:
             return "-"
         value = float(value)
-        return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
+        return f"Rs. {value:,.0f}" if value == int(value) else f"Rs. {value:,.2f}"
 
     headers = ["Reg No", "Customer Name", "Loan"]
     headers.extend([str(day) for day in range(1, 32)])
@@ -2021,8 +2023,16 @@ def export_collection_pdf(month):
     ]))
     elements.append(total_table)
 
+    def draw_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(base_font, 7)
+        canvas.setFillColor(colors.HexColor("#6b7280"))
+        canvas.drawString(24, 14, "Customer copy - Please retain this statement for your records.")
+        canvas.drawRightString(1180, 14, f"Page {doc.page}")
+        canvas.restoreState()
+
     db.session.expunge_all()
-    doc.build(elements)
+    doc.build(elements, onFirstPage=draw_footer, onLaterPages=draw_footer)
     buffer.seek(0)
 
     return send_file(
