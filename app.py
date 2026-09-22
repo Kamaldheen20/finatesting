@@ -187,6 +187,66 @@ class CompanySettings(db.Model):
 
 _FONT_CACHE = {}
 
+def _get_company_settings_for_pdf():
+    """Return the logged-in user's company print header settings."""
+    try:
+        settings = CompanySettings.query.filter_by(user_id=current_user.id).first()
+        if not settings:
+            return {"company_name": "", "address": "", "phone": ""}
+        return {
+            "company_name": (settings.company_name or "").strip(),
+            "address": (settings.address or "").strip(),
+            "phone": (settings.phone or "").strip(),
+        }
+    except Exception:
+        # PDF generation must still work if optional company-header data
+        # cannot be read.
+        logger.exception("Could not load company settings for PDF header")
+        return {"company_name": "", "address": "", "phone": ""}
+
+
+def _add_company_pdf_header(elements, normal_style, title, company=None):
+    """Add company details above the report title on every generated PDF."""
+    company = company or _get_company_settings_for_pdf()
+
+    if company["company_name"]:
+        company_style = ParagraphStyle(
+            "PdfCompanyName",
+            parent=normal_style,
+            fontSize=16,
+            leading=19,
+            alignment=1,
+            spaceAfter=3,
+        )
+        elements.append(Paragraph(_pdf_text(company["company_name"]), company_style))
+
+    contact_parts = [p for p in (company["address"], company["phone"]) if p]
+    if contact_parts:
+        contact_style = ParagraphStyle(
+            "PdfCompanyContact",
+            parent=normal_style,
+            fontSize=9,
+            leading=12,
+            alignment=1,
+            spaceAfter=6,
+        )
+        elements.append(Paragraph(_pdf_text(" | ".join(contact_parts)), contact_style))
+
+    title_style = ParagraphStyle(
+        "PdfReportTitle",
+        parent=normal_style,
+        fontName=_FONT_CACHE.get("result", (None, "Helvetica", "Helvetica-Bold", False))[2],
+        fontSize=14,
+        leading=17,
+        alignment=1,
+        spaceAfter=4,
+    )
+    elements.append(Paragraph(_pdf_text(title), title_style))
+    elements.append(Spacer(1, 10))
+
+
+
+
 
 def _find_font_file(candidates):
     for path in candidates:
@@ -1566,11 +1626,6 @@ def export_daily_report_pdf(date):
     base_font = _reg[1]   # NotoSans  (Latin)
     hdr_font  = _reg[2]   # NotoSans-Bold
 
-    title_style = ParagraphStyle(
-        "DailyTitle",
-        parent=styles["Title"],
-        fontName=hdr_font
-    )
     normal_style = ParagraphStyle(
         "DailyNormal",
         parent=styles["Normal"],
@@ -1578,8 +1633,7 @@ def export_daily_report_pdf(date):
     )
 
     elements = []
-    elements.append(Paragraph(_pdf_text(f"Daily Report - {date}"), title_style))
-    elements.append(Spacer(1, 12))
+    _add_company_pdf_header(elements, normal_style, f"Daily Report - {date}")
 
     data = [["No", "Customer ID", "Date", "Amount"]]
     for i, p in enumerate(payments, start=1):
@@ -1751,11 +1805,6 @@ def export_collection_pdf(month):
     base_font = _reg[1]   # NotoSans  (Latin)
     hdr_font  = _reg[2]   # NotoSans-Bold
 
-    title_style = ParagraphStyle(
-        "MonthlyTitle",
-        parent=styles["Title"],
-        fontName=hdr_font
-    )
     normal_style = ParagraphStyle(
         "MonthlyNormal",
         parent=styles["Normal"],
@@ -1764,10 +1813,7 @@ def export_collection_pdf(month):
     )
 
     elements = []
-    elements.append(
-        Paragraph(_pdf_text(f"Monthly Collection Sheet - {month}"), title_style)
-    )
-    elements.append(Spacer(1, 10))
+    _add_company_pdf_header(elements, normal_style, f"Monthly Collection Sheet - {month}")
 
     headers = ["ID", "Name", "Loan"]
     for day in range(1, 32):
@@ -2350,11 +2396,6 @@ def customer_statement_pdf(customer_id):
     base_font = _reg[1]   # latin_font (NotoSans)
     hdr_font  = _reg[2]   # bold font  (NotoSans-Bold)
 
-    title_style = ParagraphStyle(
-        "StmtTitle",
-        parent=styles["Title"],
-        fontName=hdr_font
-    )
     normal_style = ParagraphStyle(
         "StmtNormal",
         parent=styles["Normal"],
@@ -2362,8 +2403,7 @@ def customer_statement_pdf(customer_id):
     )
 
     elements = []
-    elements.append(Paragraph(_pdf_text("CUSTOMER STATEMENT"), title_style))
-    elements.append(Spacer(1, 12))
+    _add_company_pdf_header(elements, normal_style, "CUSTOMER STATEMENT")
 
     # _pdf_text() wraps Tamil chars with NotoSansTamil, Latin stays NotoSans
     info_lines = [
