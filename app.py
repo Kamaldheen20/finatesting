@@ -207,6 +207,10 @@ def _get_company_settings_for_pdf():
 
 def _add_company_pdf_header(elements, normal_style, title, company=None):
     """Add company details above the report title on every generated PDF."""
+    # ParagraphStyle is imported inside this helper because each PDF route
+    # historically imported ReportLab styling classes locally.
+    from reportlab.lib.styles import ParagraphStyle
+
     company = company or _get_company_settings_for_pdf()
 
     if company["company_name"]:
