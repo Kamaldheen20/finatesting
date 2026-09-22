@@ -1940,16 +1940,15 @@ def export_collection_pdf(month):
     col_widths = [58, 150, 72] + [31] * 31 + [70, 72, 82, 58]
 
     def build_collection_table(rows, include_total=False):
-        """Build one continuous register table so ReportLab can flow it naturally.
-        This avoids artificial gaps between chunk tables and keeps the final
-        DAY TOTAL row inside the same bordered table."""
+        """Build one continuous register table with print-safe borders."""
         table_rows = [header_cells] + rows
 
         if include_total:
+            # Keep DAY TOTAL as one clear label spanning Reg No, Customer and Loan.
             total_row = [
                 Paragraph("<b>DAY TOTAL</b>", small_style),
                 "",
-                ""
+                "",
             ]
             for day in range(1, 32):
                 total_row.append(money(day_totals.get(day, 0)))
@@ -1957,7 +1956,7 @@ def export_collection_pdf(month):
                 money(month_total_all),
                 money(total_paid_all),
                 money(total_balance_all),
-                "-"
+                "-",
             ])
             table_rows.append(total_row)
 
@@ -1973,7 +1972,9 @@ def export_collection_pdf(month):
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), hdr_font),
-            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
+
+            # Stronger borders throughout so figures remain separated on print.
+            ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#4b5563")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN", (2, 1), (-1, -1), "CENTER"),
             ("ALIGN", (0, 1), (1, -1), "LEFT"),
@@ -1990,12 +1991,22 @@ def export_collection_pdf(month):
 
         if include_total:
             total_idx = len(table_rows) - 1
+
+            # Make the final total row unmistakable in printed copies:
+            # bold outer border + bold internal cell separators.
             style_cmds.extend([
+                ("SPAN", (0, total_idx), (2, total_idx)),
                 ("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#dcfce7")),
                 ("FONTNAME", (0, total_idx), (-1, total_idx), hdr_font),
+                ("FONTSIZE", (0, total_idx), (-1, total_idx), 6.5),
+                ("ALIGN", (0, total_idx), (2, total_idx), "CENTER"),
+                ("VALIGN", (0, total_idx), (-1, total_idx), "MIDDLE"),
                 ("TOPPADDING", (0, total_idx), (-1, total_idx), 4),
                 ("BOTTOMPADDING", (0, total_idx), (-1, total_idx), 4),
-                ("LINEABOVE", (0, total_idx), (-1, total_idx), 0.8, colors.HexColor("#374151")),
+                ("BOX", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
+                ("INNERGRID", (0, total_idx), (-1, total_idx), 0.9, colors.HexColor("#374151")),
+                ("LINEABOVE", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
+                ("LINEBELOW", (0, total_idx), (-1, total_idx), 1.2, colors.HexColor("#111827")),
             ])
 
         table.setStyle(TableStyle(style_cmds))
