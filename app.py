@@ -244,10 +244,26 @@ def _add_company_pdf_header(elements, normal_style, title, company=None):
         fontSize=14,
         leading=17,
         alignment=1,
-        spaceAfter=4,
+        textColor=colors.white,
+        spaceAfter=0,
     )
-    elements.append(Paragraph(_pdf_text(title), title_style))
-    elements.append(Spacer(1, 10))
+    # White title text is placed inside a dark header box so it remains
+    # readable in both screen preview and printed copies.
+    title_box = Table(
+        [[Paragraph(_pdf_text(title), title_style)]],
+        colWidths=[None],
+        hAlign="CENTER",
+    )
+    title_box.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1f2937")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#111827")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(title_box)
+    elements.append(Spacer(1, 8))
 
 
 
@@ -1919,7 +1935,10 @@ def export_collection_pdf(month):
         if value is None:
             return "-"
         value = float(value)
-        return f"Rs. {value:,.0f}" if value == int(value) else f"Rs. {value:,.2f}"
+        return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
+
+    def money_cell(value):
+        return Paragraph(_pdf_text(money(value)), amount_style)
 
     headers = ["Reg No", "Customer Name", "Loan"]
     headers.extend([str(day) for day in range(1, 32)])
@@ -1961,11 +1980,11 @@ def export_collection_pdf(month):
                 "",
             ]
             for day in range(1, 32):
-                total_row.append(money(day_totals.get(day, 0)))
+                total_row.append(money_cell(day_totals.get(day, 0)))
             total_row.extend([
-                money(month_total_all),
-                money(total_paid_all),
-                money(total_balance_all),
+                money_cell(month_total_all),
+                money_cell(total_paid_all),
+                money_cell(total_balance_all),
                 "-",
             ])
             table_rows.append(total_row)
@@ -2046,17 +2065,17 @@ def export_collection_pdf(month):
         row = [
             Paragraph(_pdf_text(str(customer.customer_id)), small_style),
             Paragraph(_pdf_text(customer.name or ""), normal_style),
-            money(customer.loan_amount),
+            money_cell(customer.loan_amount),
         ]
 
         for day in range(1, 32):
             amount = cust_payments.get(day)
-            row.append(money(amount) if amount is not None else "-")
+            row.append(money_cell(amount) if amount is not None else Paragraph("-", amount_style))
 
         row.extend([
-            money(month_total),
-            money(customer.total_paid),
-            money(customer.remaining_balance),
+            money_cell(month_total),
+            money_cell(customer.total_paid),
+            money_cell(customer.remaining_balance),
             Paragraph(_pdf_text(customer.status or ""), small_style),
         ])
         customer_rows.append(row)
