@@ -1921,9 +1921,10 @@ def export_collection_pdf(month):
     ]]
     summary_table = Table(summary_data, colWidths=[125, 175, 175, 200])
     summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f3f4f6")),
+        # Keep the summary visually consistent with the rest of the
+        # print-friendly PDF: white background with black text.
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
         ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#9ca3af")),
         ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d1d5db")),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
