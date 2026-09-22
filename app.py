@@ -2007,8 +2007,8 @@ def export_collection_pdf(month):
 
         style_cmds = [
             # Clear two-level column headings.
-            ("BACKGROUND", (0, 0), (-1, 1), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR", (0, 0), (-1, 1), colors.white),
+            ("BACKGROUND", (0, 0), (-1, 1), colors.white),
+            ("TEXTCOLOR", (0, 0), (-1, 1), colors.black),
             ("FONTNAME", (0, 0), (-1, 1), hdr_font),
             ("FONTSIZE", (0, 0), (-1, 1), 7),
 
@@ -2023,7 +2023,7 @@ def export_collection_pdf(month):
             ("SPAN", (37, 0), (37, 1)),
 
             # Strong print-safe borders.
-            ("GRID", (0, 0), (-1, -1), 0.65, colors.HexColor("#374151")),
+            ("GRID", (0, 0), (-1, -1), 0.7, colors.HexColor("#374151")),
             ("BOX", (0, 0), (-1, -1), 1.0, colors.HexColor("#111827")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN", (0, 0), (-1, 1), "CENTER"),
