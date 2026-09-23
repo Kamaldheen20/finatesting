@@ -1186,6 +1186,8 @@ def api_customer_amount_update_bulk_validate():
     seen = set()
     results = []
     valid_count = 0
+    pending_count = 0
+    pending_to_save = []
 
     for index, item in enumerate(rows, start=1):
         customer_id = str((item or {}).get("customer_id", "")).strip()
@@ -1217,13 +1219,15 @@ def api_customer_amount_update_bulk_validate():
             ).first()
             if not customer:
                 valid, message = False, "Customer not found."
-                try:
-                    _upsert_pending_customer(customer_id, amount, working_date, message)
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
-                    logger.exception("Could not save pending customer %s", customer_id)
-                    return jsonify({"error": "Could not save pending customer rows."}), 500
+                if amount is not None and amount > 0:
+                    # Queue missing customers during validation itself.
+                    # Keep the original working date and amount so the
+                    # record is available even if the user never clicks
+                    # "Upload Valid Customers".
+                    pending_to_save.append(
+                        (customer_id, amount, working_date, message)
+                    )
+                    pending_count += 1
             else:
                 name = customer.name or ""
                 existing = Payment.query.filter_by(
@@ -1245,9 +1249,29 @@ def api_customer_amount_update_bulk_validate():
             "message": message
         })
 
+    # Persist the complete pending queue in one transaction after all
+    # rows have been validated. This is safer than committing once per row
+    # and guarantees the pending records exist before the 200 response is
+    # returned to the browser.
+    try:
+        for customer_id, amount, payment_date, reason in pending_to_save:
+            _upsert_pending_customer(customer_id, amount, payment_date, reason)
+        if pending_to_save:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Could not persist %s pending customer row(s) during CSV validation",
+            len(pending_to_save)
+        )
+        return jsonify({
+            "error": "CSV validation completed, but the pending customer records could not be saved."
+        }), 500
+
     return jsonify({
         "valid_count": valid_count,
         "invalid_count": len(results) - valid_count,
+        "pending_count": pending_count,
         "rows": results
     })
 
