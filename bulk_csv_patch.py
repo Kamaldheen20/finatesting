@@ -93,6 +93,8 @@ def bulk_validate_fast():
             "valid": valid,
             "message": message,
             "name": "",
+            "remaining_balance": None,
+            "overdue_days": None,
         })
 
     valid_ids = [r["customer_id"] for r in parsed if r["valid"]]
@@ -125,6 +127,23 @@ def bulk_validate_fast():
                 result["message"] = "Already collected for this date."
             else:
                 result["name"] = customer.name or ""
+                result["remaining_balance"] = customer.remaining_balance or 0
+                # Match the normal customer lookup: overdue installments are
+                # based on daily_due, elapsed days from start_date (inclusive),
+                # and total_paid.
+                overdue_days = 0
+                try:
+                    daily_due = customer.daily_due or 0
+                    if customer.start_date and daily_due > 0:
+                        start = datetime.strptime(str(customer.start_date), "%Y-%m-%d")
+                        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                        days_passed = 0 if today < start else (today - start).days + 1
+                        overdue_amount = (daily_due * days_passed) - (customer.total_paid or 0)
+                        if overdue_amount > 0:
+                            overdue_days = int(overdue_amount // daily_due)
+                except (ValueError, TypeError):
+                    overdue_days = 0
+                result["overdue_days"] = overdue_days
 
     # Missing customers must be persisted during validation. This fast
     # endpoint replaces the route in app.py at startup, so pending handling
@@ -164,6 +183,8 @@ def bulk_validate_fast():
                 "row": r["row"],
                 "customer_id": r["customer_id"],
                 "name": r["name"],
+                "remaining_balance": r.get("remaining_balance"),
+                "overdue_days": r.get("overdue_days"),
                 "valid": r["valid"],
                 "message": r["message"],
             }
