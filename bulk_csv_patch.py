@@ -3,7 +3,29 @@ from datetime import datetime
 from flask import jsonify, request
 from flask_login import current_user, login_required
 
-from models import db, Customer, Payment
+from models import db, Customer, Payment, PendingCustomer
+
+
+def _upsert_pending_customer(customer_id, amount, payment_date, reason="Customer not found"):
+    pending = PendingCustomer.query.filter_by(
+        customer_id=customer_id,
+        payment_date=payment_date,
+        user_id=current_user.id,
+    ).first()
+    if pending:
+        pending.amount = amount
+        pending.reason = reason
+        pending.updated_at = datetime.utcnow()
+        return pending
+    pending = PendingCustomer(
+        customer_id=customer_id,
+        amount=amount,
+        payment_date=payment_date,
+        reason=reason,
+        user_id=current_user.id,
+    )
+    db.session.add(pending)
+    return pending
 
 
 def _normalize_amount(raw):
@@ -104,10 +126,39 @@ def bulk_validate_fast():
             else:
                 result["name"] = customer.name or ""
 
+    # Missing customers must be persisted during validation. This fast
+    # endpoint replaces the route in app.py at startup, so pending handling
+    # has to live here as well.
+    pending_rows = [
+        r for r in parsed
+        if (
+            not r["valid"]
+            and r["message"] == "Customer not found."
+            and r["amount"] is not None
+            and r["amount"] > 0
+        )
+    ]
+
+    try:
+        for r in pending_rows:
+            _upsert_pending_customer(
+                r["customer_id"],
+                r["amount"],
+                working_date,
+                "Customer not found.",
+            )
+        if pending_rows:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app_logger = getattr(request, "app", None)
+        raise
+
     valid_count = sum(1 for r in parsed if r["valid"])
     return jsonify({
         "valid_count": valid_count,
         "invalid_count": len(parsed) - valid_count,
+        "pending_count": len(pending_rows),
         "rows": [
             {
                 "row": r["row"],
