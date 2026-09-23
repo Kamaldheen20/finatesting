@@ -51,5 +51,27 @@ function esc(s){const d=document.createElement("div");d.textContent=s??"";return
 function alertBox(m,t="danger"){document.getElementById("modalAlert").innerHTML='<div class="alert alert-'+t+'">'+esc(m)+'</div>'}
 async function openEdit(id){activeId=id;document.getElementById("modalAlert").innerHTML="";try{const r=await fetch("/api/customer-amount-update/pending/"+id);const d=await r.json();if(!r.ok){alertBox(d.error||"Could not load pending customer.");return}fCustomerId.value=d.customer_id||"";fName.value=d.name||"";fMobile.value=d.mobile||"";fAddress.value=d.address||"";fLoan.value=d.loan_amount||"";fDue.value=d.daily_due||"";fAmount.value=d.amount||"";fStart.value=d.start_date||d.payment_date||"";fEnd.value=d.end_date||"";fPaymentDate.textContent=d.payment_date||"-";modal.show()}catch(e){alertBox("Could not reach the server.")}}
 saveBtn.addEventListener("click",async function(){if(!activeId)return;const payload={customer_id:fCustomerId.value.trim(),name:fName.value.trim(),mobile:fMobile.value.trim(),address:fAddress.value.trim(),loan_amount:fLoan.value,daily_due:fDue.value,start_date:fStart.value,end_date:fEnd.value};if(!payload.customer_id||!payload.name){alertBox("Registration number and name are required.");return}if(payload.loan_amount===""||payload.daily_due===""||Number(payload.loan_amount)<0||Number(payload.daily_due)<0){alertBox("Enter valid Loan Amount and Daily Due.");return}this.disabled=true;try{const r=await fetch("/api/customer-amount-update/pending/"+activeId+"/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok){alertBox(d.error||"Could not save customer.");return}modal.hide();document.getElementById("alertArea").innerHTML='<div class="alert alert-success">'+esc(d.message)+'</div>';setTimeout(()=>location.reload(),500)}catch(e){alertBox("Could not reach the server.")}finally{this.disabled=false}});
+async function clearAllPending(){
+  const confirmed=confirm("Clear the Pending Customers page completely?\n\nThis will permanently remove ALL pending records for your account.\nNo customer or payment records will be deleted.");
+  if(!confirmed)return;
+  const btn=document.querySelector('button[onclick="clearAllPending()"]');
+  if(btn){btn.disabled=true;btn.textContent="Clearing...";}
+  try{
+    const r=await fetch("/api/pending-customers/clear-all",{method:"POST",headers:{"Content-Type":"application/json"}});
+    const textResponse=await r.text();
+    let d={};
+    try{d=JSON.parse(textResponse)}catch(e){}
+    if(!r.ok){
+      document.getElementById("alertArea").innerHTML='<div class="alert alert-danger">'+esc(d.error||("Clear failed ("+r.status+")."))+'</div>';
+      return;
+    }
+    document.getElementById("alertArea").innerHTML='<div class="alert alert-success">'+esc(d.message||"All pending customers cleared.")+'</div>';
+    setTimeout(()=>window.location.href="/pending-customers",500);
+  }catch(e){
+    document.getElementById("alertArea").innerHTML='<div class="alert alert-danger">Could not reach the server. Please try again.</div>';
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent="Clear All";}
+  }
+}
 async function deletePending(id){if(!confirm("Delete this pending customer? The collection amount will not be saved."))return;try{const r=await fetch("/api/customer-amount-update/pending/"+id+"/delete",{method:"POST"});const d=await r.json();if(!r.ok){document.getElementById("alertArea").innerHTML='<div class="alert alert-danger">'+esc(d.error||"Delete failed.")+'</div>';return}document.getElementById("pending-row-"+id)?.remove();document.getElementById("alertArea").innerHTML='<div class="alert alert-success">'+esc(d.message)+'</div>';setTimeout(()=>location.reload(),300)}catch(e){document.getElementById("alertArea").innerHTML='<div class="alert alert-danger">Could not reach the server.</div>'}}
 </script></body></html>
