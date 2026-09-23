@@ -1489,7 +1489,7 @@ def api_pending_customer_save(pending_id):
     return jsonify({"success": True, "message": f"Customer {customer_id} added and {amount:,.2f} collected for {p.payment_date}."})
 
 
-@app.route("/api/customer-amount-update/pending/clear-all", methods=["POST"])
+@app.route("/api/pending-customers/clear-all", methods=["POST"])
 @login_required
 def api_pending_customer_clear_all():
     try:
