@@ -1489,6 +1489,25 @@ def api_pending_customer_save(pending_id):
     return jsonify({"success": True, "message": f"Customer {customer_id} added and {amount:,.2f} collected for {p.payment_date}."})
 
 
+@app.route("/api/customer-amount-update/pending/clear-all", methods=["POST"])
+@login_required
+def api_pending_customer_clear_all():
+    try:
+        deleted = PendingCustomer.query.filter_by(user_id=current_user.id).delete(
+            synchronize_session=False
+        )
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "deleted_count": deleted,
+            "message": f"{deleted} pending customer record(s) cleared."
+        })
+    except Exception:
+        db.session.rollback()
+        logger.exception("Could not clear pending customer queue")
+        return jsonify({"error": "Could not clear the pending customer queue."}), 500
+
+
 @app.route("/api/customer-amount-update/pending/<int:pending_id>/delete", methods=["POST"])
 @login_required
 def api_pending_customer_delete(pending_id):
