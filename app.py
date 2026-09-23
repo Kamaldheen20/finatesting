@@ -1394,13 +1394,41 @@ def api_pending_customer_save(pending_id):
         return jsonify({"error": "Enter valid Loan Amount, Daily Due and collection amount."}), 400
 
     existing = Customer.query.filter_by(customer_id=customer_id, user_id=current_user.id).with_for_update().first()
-    if existing:
-        return jsonify({"error": f"Customer ID '{customer_id}' already exists."}), 409
     existing_payment = Payment.query.filter_by(
         customer_id=customer_id, payment_date=p.payment_date, user_id=current_user.id
     ).first()
     if existing_payment:
         return jsonify({"error": "A collection already exists for this customer and date."}), 409
+
+    # If this customer was created from an earlier pending date, keep the
+    # later pending rows as a persistent queue and apply this row directly
+    # to the existing customer instead of asking the user to create the
+    # customer again.
+    if existing:
+        try:
+            existing.total_paid = (existing.total_paid or 0) + amount
+            existing.remaining_balance = (existing.loan_amount or 0) - existing.total_paid
+            if existing.remaining_balance <= 0:
+                existing.remaining_balance = 0
+                existing.status = "Closed"
+            else:
+                existing.status = "Active"
+            db.session.add(Payment(
+                customer_id=existing.customer_id,
+                payment_date=p.payment_date,
+                amount=amount,
+                user_id=current_user.id
+            ))
+            db.session.delete(p)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Could not apply pending collection %s to existing customer", pending_id)
+            return jsonify({"error": "Could not apply the pending collection. Nothing was changed."}), 500
+        return jsonify({
+            "success": True,
+            "message": f"Collection ₹{amount:,.2f} applied to existing customer {existing.customer_id} for {p.payment_date}."
+        })
 
     if not end_date and start_date:
         try:
