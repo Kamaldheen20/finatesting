@@ -1645,8 +1645,8 @@
       addCustomerRow({
         customer_id: result.customer_id,
         name: result.name || "",
-        remaining_balance: null,
-        overdue_days: null
+        remaining_balance: result.remaining_balance != null ? result.remaining_balance : 0,
+        overdue_days: result.overdue_days != null ? result.overdue_days : 0
       }, false, false);
 
       const state = rows[result.customer_id];
