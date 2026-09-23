@@ -1709,10 +1709,25 @@
         bulkCsvUploadBtn.textContent = "Upload Valid Customers";
         showBulkCsvAlert(
           result.data.invalid_count > 0
-            ? (result.data.invalid_count + " row(s) are pending. Upload the valid rows now; add pending customers separately.")
+            ? ("<strong>" + result.data.invalid_count + " customer(s) not found.</strong> They were automatically saved to Pending Customers with the selected collection date and amount. <a href=\"/pending-customers\" class=\"alert-link\">Open Pending Customers</a>. Valid rows can be uploaded now.")
             : (result.data.valid_count + " row(s) validated successfully."),
           result.data.invalid_count > 0 ? "warning" : "success"
         );
+
+        // Missing registration numbers are persisted by the validation endpoint.
+        // Keep the pending workflow visible on the Customer Amount Update page
+        // immediately after validation so the operator does not have to
+        // re-enter or manually save those rows.
+        if (result.data.invalid_count > 0) {
+          const pendingRows = result.data.rows.filter(function (row) {
+            return !row.valid && row.message === "Customer not found.";
+          }).length;
+          setBulkCsvSummary(
+            '<span class="badge bg-success">' + result.data.valid_count + ' valid</span> ' +
+            '<span class="badge bg-warning text-dark">' + pendingRows + ' saved to Pending Customers</span>',
+            result.data.valid_count + " valid, " + pendingRows + " automatically saved to Pending Customers"
+          );
+        }
       } else {
         bulkCsvUploadBtn.disabled = true;
         bulkCsvUploadBtn.textContent = "No Valid Customers";
@@ -1734,11 +1749,6 @@
     bulkCsvUploadBtn.addEventListener("click", function () {
       if (!bulkCsvRows.length || !bulkCsvValidation) {
         showBulkCsvAlert("Please select a CSV and wait for validation to finish.", "warning");
-        return;
-      }
-
-      if (Number(bulkCsvValidation.invalid_count) > 0) {
-        showBulkCsvAlert("The CSV still contains invalid rows. Fix the CSV and select it again.", "danger");
         return;
       }
 
