@@ -13,7 +13,6 @@ else:
 
     load_dotenv(env_path)
 
-from app import app
 from license_client import verify_license
 
 # pywebview blocks all file downloads by default (a security default).
@@ -59,6 +58,8 @@ if __name__ == "__main__":
         messagebox.showerror("License Activation", message)
         root.destroy()
         raise SystemExit(1)
+
+    from app import app
 
     server_thread = threading.Thread(
         target=run_server,
