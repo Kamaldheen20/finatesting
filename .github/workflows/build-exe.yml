@@ -1,0 +1,48 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-desktop.txt
+
+      - name: Build EXE
+        run: |
+          pyinstaller --clean --noconfirm finatesting.spec
+
+      - name: Verify EXE
+        shell: powershell
+        run: |
+          if (!(Test-Path "dist\FinanceCollectionManager\FinanceCollectionManager.exe")) {
+            throw "EXE was not created."
+          }
+          Get-Item "dist\FinanceCollectionManager\FinanceCollectionManager.exe"
+
+      - name: Package client ZIP
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "client-package" | Out-Null
+          Copy-Item "dist\FinanceCollectionManager\*" "client-package" -Recurse
+          Copy-Item ".env.example" "client-package\.env.example"
+          Compress-Archive -Path "client-package\*" -DestinationPath "FinanceCollectionManager-Windows.zip" -Force
+
+      - name: Upload client package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinanceCollectionManager-Windows
+          path: FinanceCollectionManager-Windows.zip
+          retention-days: 30
