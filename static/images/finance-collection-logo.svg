@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Finance collection management logo">
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b3b82"/>
+      <stop offset=".55" stop-color="#0b76b8"/>
+      <stop offset="1" stop-color="#39d353"/>
+    </linearGradient>
+    <linearGradient id="swoosh" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#063b7a"/>
+      <stop offset=".55" stop-color="#0b86c9"/>
+      <stop offset="1" stop-color="#35c94a"/>
+    </linearGradient>
+    <linearGradient id="coin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd84d"/>
+      <stop offset="1" stop-color="#e9a900"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#159447"/>
+      <stop offset="1" stop-color="#67d84d"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="7" stdDeviation="8" flood-opacity=".18"/>
+    </filter>
+  </defs>
+
+  <circle cx="256" cy="256" r="214" fill="none" stroke="url(#ring)" stroke-width="24"
+          stroke-linecap="round" stroke-dasharray="1080 300" transform="rotate(-28 256 256)"/>
+
+  <!-- calendar / collection register -->
+  <g filter="url(#shadow)">
+    <rect x="128" y="103" width="266" height="258" rx="28" fill="#086ab0"/>
+    <rect x="150" y="139" width="222" height="197" rx="20" fill="#fff"/>
+    <rect x="126" y="93" width="48" height="62" rx="18" fill="#07518f"/>
+    <rect x="348" y="93" width="48" height="62" rx="18" fill="#07518f"/>
+    <rect x="177" y="174" width="118" height="15" rx="7.5" fill="#b8c7d8"/>
+    <rect x="177" y="205" width="92" height="13" rx="6.5" fill="#d2dce7"/>
+    <circle cx="324" cy="213" r="26" fill="#20b957"/>
+    <path d="M311 213l9 9 18-21" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="177" y="247" width="118" height="15" rx="7.5" fill="#b8c7d8"/>
+    <rect x="177" y="278" width="92" height="13" rx="6.5" fill="#d2dce7"/>
+    <circle cx="324" cy="282" r="26" fill="#ef5350"/>
+    <circle cx="324" cy="282" r="12" fill="none" stroke="#fff" stroke-width="6"/>
+    <path d="M324 282v-8M324 282h8" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <!-- rupee collection -->
+  <g filter="url(#shadow)">
+    <ellipse cx="151" cy="373" rx="77" ry="20" fill="#b57900"/>
+    <rect x="74" y="342" width="154" height="31" fill="url(#coin)"/>
+    <ellipse cx="151" cy="342" rx="77" ry="20" fill="#ffd84d"/>
+    <ellipse cx="151" cy="342" rx="49" ry="12" fill="#fff2a8" opacity=".75"/>
+    <text x="151" y="354" text-anchor="middle" font-family="Arial,sans-serif" font-size="34" font-weight="700" fill="#5b4300">₹</text>
+    <ellipse cx="151" cy="405" rx="77" ry="20" fill="#b57900"/>
+    <rect x="74" y="374" width="154" height="31" fill="url(#coin)"/>
+    <ellipse cx="151" cy="374" rx="77" ry="20" fill="#f8c52c"/>
+    <ellipse cx="151" cy="437" rx="77" ry="20" fill="#b57900"/>
+    <rect x="74" y="406" width="154" height="31" fill="url(#coin)"/>
+    <ellipse cx="151" cy="406" rx="77" ry="20" fill="#f8c52c"/>
+  </g>
+
+  <!-- growth bars -->
+  <g fill="url(#bars)">
+    <rect x="356" y="346" width="28" height="67" rx="7"/>
+    <rect x="391" y="315" width="28" height="98" rx="7"/>
+    <rect x="426" y="275" width="28" height="138" rx="7"/>
+  </g>
+
+  <!-- collection / growth swoosh -->
+  <path d="M80 431 C174 355 248 342 330 356 C379 364 413 345 446 315"
+        fill="none" stroke="url(#swoosh)" stroke-width="38" stroke-linecap="round"/>
+  <path d="M431 307 L468 313 L448 278 Z" fill="#39c951"/>
+
+  <!-- subtle users -->
+  <g fill="#07518f">
+    <circle cx="273" cy="326" r="13"/>
+    <path d="M249 354c0-14 11-25 24-25s24 11 24 25v11h-48z"/>
+  </g>
+</svg>
