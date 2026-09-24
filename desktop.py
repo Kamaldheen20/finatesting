@@ -14,6 +14,7 @@ else:
     load_dotenv(env_path)
 
 from app import app
+from license_client import verify_license
 
 # pywebview blocks all file downloads by default (a security default).
 # This must be set BEFORE webview.create_window()/webview.start(),
@@ -33,6 +34,31 @@ def run_server():
 
 
 if __name__ == "__main__":
+
+    license_key = os.getenv("FINANCE_LICENSE_KEY", "").strip()
+    if not license_key:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        license_key = simpledialog.askstring(
+            "License Activation",
+            "Enter your Finance Collection System license key:"
+        ) or ""
+        root.destroy()
+
+    if not license_key:
+        raise SystemExit("A license key is required.")
+
+    ok, message = verify_license(license_key)
+    if not ok:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("License Activation", message)
+        root.destroy()
+        raise SystemExit(1)
 
     server_thread = threading.Thread(
         target=run_server,
