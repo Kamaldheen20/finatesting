@@ -3,6 +3,7 @@
 # ==========================
 from datetime import datetime
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 import re
 import os
 import secrets
@@ -516,6 +517,184 @@ def _compute_alert(customer):
         pass  # malformed/missing end_date -> fall through to "Active"
 
     return "Active"
+
+
+# ==========================
+# LICENSE SERVICE
+# ==========================
+#
+# The license database is intentionally kept separate from the customer's
+# application database in production. The Render service should set
+# LICENSE_DATABASE_URL to the private/master license database URL.
+# License records contain only hashes of license keys and device IDs.
+#
+def _license_db_url():
+    return os.getenv("LICENSE_DATABASE_URL") or database_url
+
+
+def _license_engine():
+    from sqlalchemy import create_engine
+    return create_engine(
+        _license_db_url(),
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=2,
+        max_overflow=1,
+    )
+
+
+def _init_license_tables():
+    if not os.getenv("LICENSE_DATABASE_URL"):
+        return
+    engine = _license_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_licenses (
+                id SERIAL PRIMARY KEY,
+                license_hash VARCHAR(128) UNIQUE NOT NULL,
+                customer_name VARCHAR(200) NOT NULL,
+                database_id VARCHAR(200) DEFAULT '',
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                max_devices INTEGER NOT NULL DEFAULT 1,
+                expires_at TIMESTAMP NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_license_devices (
+                id SERIAL PRIMARY KEY,
+                license_id INTEGER NOT NULL REFERENCES app_licenses(id) ON DELETE CASCADE,
+                device_id VARCHAR(128) NOT NULL,
+                first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(license_id, device_id)
+            )
+        """))
+
+
+def _license_hash(value):
+    import hashlib
+    return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
+
+
+@app.route("/api/license/activate", methods=["POST"])
+def api_license_activate():
+    # Never expose the license database or its credentials to the EXE.
+    if not os.getenv("LICENSE_DATABASE_URL"):
+        return jsonify({
+            "success": False,
+            "message": "License service is not configured."
+        }), 503
+
+    data = request.get_json(silent=True) or {}
+    license_key = str(data.get("license_key", "")).strip()
+    device_id = str(data.get("device_id", "")).strip()
+
+    if not license_key or not device_id:
+        return jsonify({
+            "success": False,
+            "message": "License key and device ID are required."
+        }), 400
+
+    if len(device_id) > 128:
+        return jsonify({"success": False, "message": "Invalid device ID."}), 400
+
+    engine = _license_engine()
+    with engine.begin() as conn:
+        row = conn.execute(text("""
+            SELECT id, customer_name, status, max_devices, expires_at
+            FROM app_licenses
+            WHERE license_hash = :license_hash
+        """), {"license_hash": _license_hash(license_key)}).mappings().first()
+
+        if not row:
+            return jsonify({"success": False, "message": "Invalid license key."}), 403
+
+        if row["status"] != "active":
+            return jsonify({"success": False, "message": "This license is not active."}), 403
+
+        if row["expires_at"] is not None and datetime.utcnow() >= row["expires_at"]:
+            return jsonify({"success": False, "message": "This license has expired."}), 403
+
+        devices = conn.execute(text("""
+            SELECT device_id
+            FROM app_license_devices
+            WHERE license_id = :license_id
+        """), {"license_id": row["id"]}).mappings().all()
+
+        known = any(d["device_id"] == device_id for d in devices)
+        if not known and len(devices) >= row["max_devices"]:
+            return jsonify({
+                "success": False,
+                "message": "This license has reached its device limit."
+            }), 403
+
+        if known:
+            conn.execute(text("""
+                UPDATE app_license_devices
+                SET last_seen_at = CURRENT_TIMESTAMP
+                WHERE license_id = :license_id AND device_id = :device_id
+            """), {"license_id": row["id"], "device_id": device_id})
+        else:
+            conn.execute(text("""
+                INSERT INTO app_license_devices (license_id, device_id)
+                VALUES (:license_id, :device_id)
+            """), {"license_id": row["id"], "device_id": device_id})
+
+    return jsonify({
+        "success": True,
+        "message": f"License activated for {row['customer_name']}."
+    })
+
+
+@app.route("/api/license/admin/create", methods=["POST"])
+def api_license_admin_create():
+    admin_key = os.getenv("LICENSE_ADMIN_KEY", "")
+    supplied = request.headers.get("X-License-Admin-Key", "")
+    if not admin_key or not secrets.compare_digest(supplied, admin_key):
+        return jsonify({"error": "Unauthorized."}), 401
+
+    if not os.getenv("LICENSE_DATABASE_URL"):
+        return jsonify({"error": "License service is not configured."}), 503
+
+    data = request.get_json(silent=True) or {}
+    customer_name = str(data.get("customer_name", "")).strip()
+    database_id = str(data.get("database_id", "")).strip()
+    max_devices = int(data.get("max_devices", 1) or 1)
+    expires_at = data.get("expires_at")
+
+    if not customer_name:
+        return jsonify({"error": "customer_name is required."}), 400
+    if max_devices < 1 or max_devices > 10:
+        return jsonify({"error": "max_devices must be between 1 and 10."}), 400
+
+    license_key = "FIN-" + secrets.token_urlsafe(18).replace("_", "-").replace("-", "")[:18].upper()
+    engine = _license_engine()
+
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            INSERT INTO app_licenses
+                (license_hash, customer_name, database_id, max_devices, expires_at)
+            VALUES
+                (:license_hash, :customer_name, :database_id, :max_devices, :expires_at)
+            RETURNING id
+        """), {
+            "license_hash": _license_hash(license_key),
+            "customer_name": customer_name,
+            "database_id": database_id,
+            "max_devices": max_devices,
+            "expires_at": expires_at or None,
+        })
+        license_id = result.scalar_one()
+
+    # The raw key is returned only at creation time; the database stores its hash.
+    return jsonify({
+        "success": True,
+        "license_id": license_id,
+        "license_key": license_key,
+        "customer_name": customer_name,
+        "max_devices": max_devices,
+    }), 201
 
 
 # ==========================
@@ -2980,6 +3159,10 @@ def logout():
 
 with app.app_context():
     db.create_all()
+    try:
+        _init_license_tables()
+    except Exception:
+        logger.exception("Could not initialize license service tables")
 
     admin = Admin.query.filter_by(username="admin").first()
 
