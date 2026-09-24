@@ -6,9 +6,14 @@ import urllib.error
 import urllib.request
 import uuid
 
+_default_license_server = (
+    "https://finatesting-ac6r.onrender.com"
+    if getattr(__import__("sys"), "frozen", False)
+    else "http://127.0.0.1:5050"
+)
 LICENSE_SERVER_URL = os.getenv(
     "LICENSE_SERVER_URL",
-    "https://finatesting-ac6r.onrender.com"
+    _default_license_server
 ).rstrip("/")
 
 
