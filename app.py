@@ -71,6 +71,23 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ---------------------------------------------------------------------
+# CUSTOMER-SPECIFIC DESKTOP BUILD DATABASE
+#
+# For the public GitHub source, leave this value EMPTY.
+# For a customer-specific EXE, make a PRIVATE local copy of this file
+# and put that customer's Supabase PostgreSQL URL in EMBEDDED_DATABASE_URL
+# before running PyInstaller.
+#
+# Example (PRIVATE BUILD ONLY):
+# EMBEDDED_DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE"
+#
+# Never commit a real customer DATABASE_URL to GitHub.
+# ---------------------------------------------------------------------
+EMBEDDED_DATABASE_URL = ""
+
+# .env is still supported for development/Render. In a customer EXE,
+# the embedded URL takes priority, so the customer does not need a .env.
 env_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(env_path)
 
@@ -111,18 +128,19 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "false"
 # large-file / decompression-bomb style denial-of-service uploads.
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB
 
-database_url = os.getenv("DATABASE_URL")
+# Customer EXE builds use the embedded URL.
+# Development/Render builds continue to use DATABASE_URL from the environment.
+database_url = EMBEDDED_DATABASE_URL.strip() or os.getenv("DATABASE_URL")
 
 if not database_url:
     # Fail loudly with a clear, actionable message instead of letting
     # Flask-SQLAlchemy raise its generic "SQLALCHEMY_DATABASE_URI must
     # be set" RuntimeError with no context about WHY it's missing.
     error_msg = (
-        f"DATABASE_URL not found.\n\n"
-        f"Expected a .env file at:\n{env_path}\n\n"
-        f"containing a line like:\n"
-        f"DATABASE_URL=postgresql://user:password@host:5432/dbname\n\n"
-        f"Place a .env file next to the .exe and restart the app."
+        f"DATABASE_URL not configured.\\n\\n"
+        f"For development/Render, set DATABASE_URL in .env/environment.\\n"
+        f"For a customer EXE, put that customer's database URL in\\n"
+        f"EMBEDDED_DATABASE_URL in app.py before building the EXE."
     )
     if getattr(sys, "frozen", False):
         # Show a native Windows message box since there's no console
