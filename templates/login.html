@@ -1,22 +1,15 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
-
 <meta charset="UTF-8">
-
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
 <title>Finance Collection Manager - Login</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 
 <style>
-
     body{
-        background: linear-gradient(135deg, #0d6efd, #0a58ca);
+        background: linear-gradient(135deg, #f4f8fc, #eaf5ef);
         min-height: 100vh;
         display: flex;
         align-items: center;
@@ -24,16 +17,16 @@
 
     .login-card{
         border: none;
-        border-radius: 15px;
+        border-radius: 18px;
         overflow: hidden;
     }
 
     .logo{
-        width: 110px;
-        height: 110px;
+        width: 150px;
+        height: 150px;
         display: block;
-        margin-left: auto;
-        margin-right: auto;
+        margin: 0 auto 10px;
+        object-fit: contain;
     }
 
     .card-header{
@@ -42,8 +35,9 @@
     }
 
     .app-title{
-        font-weight: bold;
-        color: #0d6efd;
+        font-weight: 700;
+        color: #123b68;
+        letter-spacing: -.3px;
     }
 
     .subtitle{
@@ -51,126 +45,106 @@
         font-size: 14px;
     }
 
+    .btn-primary{
+        background: #0b6fb3;
+        border-color: #0b6fb3;
+    }
+
+    .btn-primary:hover{
+        background: #075b94;
+        border-color: #075b94;
+    }
 </style>
-
-
 </head>
 
 <body>
-
 <div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-5">
 
+            <div class="card shadow-lg login-card">
 
-<div class="row justify-content-center">
+                <div class="card-header text-center pt-4">
+                    <img
+                        src="{{ url_for('static', filename='images/finance-collection-logo.svg') }}"
+                        class="logo"
+                        alt="Finance Collection Management System logo">
 
-    <div class="col-md-5">
+                    <h3 class="app-title">
+                        Finance Collection Manager
+                    </h3>
 
-        <div class="card shadow-lg login-card">
+                    <p class="subtitle">
+                        Secure Finance Collection System
+                    </p>
+                </div>
 
-            <div class="card-header text-center pt-4">
+                <div class="card-body p-4">
 
-                <svg class="logo mb-3" viewBox="0 0 512 512" role="img" aria-label="Finance Collection Manager logo">
-                    <defs>
-                        <linearGradient id="loginLogoGradient" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0%" stop-color="#0d6efd"/>
-                            <stop offset="100%" stop-color="#0a58ca"/>
-                        </linearGradient>
-                    </defs>
-                    <rect width="512" height="512" rx="96" fill="url(#loginLogoGradient)"/>
-                    <circle cx="256" cy="256" r="164" fill="#ffffff"/>
-                    <path d="M170 300h172M188 260h136M206 220h100" fill="none" stroke="#0d6efd" stroke-width="24" stroke-linecap="round"/>
-                    <path d="M176 334h160" fill="none" stroke="#198754" stroke-width="22" stroke-linecap="round"/>
-                    <circle cx="170" cy="300" r="18" fill="#198754"/>
-                    <circle cx="188" cy="260" r="18" fill="#0d6efd"/>
-                    <circle cx="206" cy="220" r="18" fill="#0d6efd"/>
-                </svg>
+                    {% with messages = get_flashed_messages() %}
+                    {% if messages %}
+                    <div class="alert alert-danger">
+                        {{ messages[0] }}
+                    </div>
+                    {% endif %}
+                    {% endwith %}
 
-                <h3 class="app-title">
-                    Finance Collection Manager
-                </h3>
+                    <form method="POST">
 
-                <p class="subtitle">
-                    Secure Finance Collection System
-                </p>
+                        <label class="form-label">
+                            Username
+                        </label>
 
+                        <input
+                            type="text"
+                            name="username"
+                            class="form-control mb-3"
+                            placeholder="Enter Username"
+                            required>
+
+                        <label class="form-label">
+                            Password
+                        </label>
+
+                        <input
+                            type="password"
+                            name="password"
+                            class="form-control mb-4"
+                            placeholder="Enter Password"
+                            required>
+
+                        <button
+                            type="submit"
+                            class="btn btn-primary w-100">
+                            Login
+                        </button>
+
+                    </form>
+
+                    <div class="text-center mt-3">
+                        <a href="{{ url_for('forgot_password') }}">
+                            Forgot Password?
+                        </a>
+                    </div>
+
+                    <div class="text-center mt-4">
+                        <a href="/register" class="text-decoration-none">
+                            Create New Account
+                        </a>
+                    </div>
+
+                </div>
             </div>
 
-            <div class="card-body p-4">
-
-                {% with messages = get_flashed_messages() %}
-                {% if messages %}
-                <div class="alert alert-danger">
-                    {{ messages[0] }}
-                </div>
-                {% endif %}
-                {% endwith %}
-
-                <form method="POST">
-
-                    <label class="form-label">
-                        Username
-                    </label>
-
-                    <input
-                        type="text"
-                        name="username"
-                        class="form-control mb-3"
-                        placeholder="Enter Username"
-                        required>
-
-                    <label class="form-label">
-                        Password
-                    </label>
-
-                    <input
-                        type="password"
-                        name="password"
-                        class="form-control mb-4"
-                        placeholder="Enter Password"
-                        required>
-
-                    <button
-                        type="submit"
-                        class="btn btn-primary w-100">
-
-                        Login
-
-                    </button>
-
-                </form>
-                <div class="text-center mt-3">
-    <a href="{{ url_for('forgot_password') }}">
-        Forgot Password?
-    </a>
-</div>
-
-                <div class="text-center mt-4">
-
-                    <a href="/register" class="text-decoration-none">
-
-                        Create New Account
-                    </a>
-
-                </div>
-
+            <div class="text-center mt-3 text-secondary">
+                <small>
+                    Finance Collection Manager v1.0
+                </small>
             </div>
 
         </div>
-
-        <div class="text-center mt-3 text-white">
-
-            <small>
-                Finance Collection Manager v1.0
-            </small>
-
-        </div>
-
     </div>
-
-</div>
-
 </div>
 
 </body>
-
 </html>
