@@ -29,8 +29,11 @@
     }
 
     .logo{
-        width: 120px;
-        height: auto;
+        width: 110px;
+        height: 110px;
+        display: block;
+        margin-left: auto;
+        margin-right: auto;
     }
 
     .card-header{
@@ -66,10 +69,21 @@
 
             <div class="card-header text-center pt-4">
 
-                <img
-                    src="{{ url_for('static', filename='images/logo.png') }}"
-                    alt="FCM Logo"
-                    class="logo mb-3">
+                <svg class="logo mb-3" viewBox="0 0 512 512" role="img" aria-label="Finance Collection Manager logo">
+                    <defs>
+                        <linearGradient id="loginLogoGradient" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stop-color="#0d6efd"/>
+                            <stop offset="100%" stop-color="#0a58ca"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="512" height="512" rx="96" fill="url(#loginLogoGradient)"/>
+                    <circle cx="256" cy="256" r="164" fill="#ffffff"/>
+                    <path d="M170 300h172M188 260h136M206 220h100" fill="none" stroke="#0d6efd" stroke-width="24" stroke-linecap="round"/>
+                    <path d="M176 334h160" fill="none" stroke="#198754" stroke-width="22" stroke-linecap="round"/>
+                    <circle cx="170" cy="300" r="18" fill="#198754"/>
+                    <circle cx="188" cy="260" r="18" fill="#0d6efd"/>
+                    <circle cx="206" cy="220" r="18" fill="#0d6efd"/>
+                </svg>
 
                 <h3 class="app-title">
                     Finance Collection Manager
