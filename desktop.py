@@ -5,21 +5,15 @@ import time
 import webview
 from dotenv import load_dotenv
 
-# Load .env from EXE folder or current folder
 if getattr(sys, "frozen", False):
     env_path = os.path.join(os.path.dirname(sys.executable), ".env")
 else:
     env_path = ".env"
+load_dotenv(env_path)
 
-    load_dotenv(env_path)
+from license_client import verify_license, verify_local_activation, save_local_activation
 
-from license_client import verify_license
-
-# pywebview blocks all file downloads by default (a security default).
-# This must be set BEFORE webview.create_window()/webview.start(),
-# otherwise send_file(as_attachment=True) responses (your PDF/Excel
-# exports) get silently swallowed instead of triggering a save dialog.
-webview.settings['ALLOW_DOWNLOADS'] = True
+webview.settings["ALLOW_DOWNLOADS"] = True
 
 
 def run_server():
@@ -28,46 +22,45 @@ def run_server():
         port=5000,
         debug=False,
         use_reloader=False,
-        threaded=True
+        threaded=True,
     )
 
 
 if __name__ == "__main__":
+    activated, _ = verify_local_activation()
 
-    license_key = os.getenv("FINANCE_LICENSE_KEY", "").strip()
-    if not license_key:
-        import tkinter as tk
-        from tkinter import simpledialog
-        root = tk.Tk()
-        root.withdraw()
-        license_key = simpledialog.askstring(
-            "License Activation",
-            "Enter your Finance Collection System license key:"
-        ) or ""
-        root.destroy()
+    if not activated:
+        license_key = os.getenv("FINANCE_LICENSE_KEY", "").strip()
+        if not license_key:
+            import tkinter as tk
+            from tkinter import simpledialog
+            root = tk.Tk()
+            root.withdraw()
+            license_key = simpledialog.askstring(
+                "License Activation",
+                "Enter your Finance Collection System license key:",
+            ) or ""
+            root.destroy()
 
-    if not license_key:
-        raise SystemExit("A license key is required.")
+        if not license_key:
+            raise SystemExit("A license key is required.")
 
-    ok, message = verify_license(license_key)
-    if not ok:
-        import tkinter as tk
-        from tkinter import messagebox
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("License Activation", message)
-        root.destroy()
-        raise SystemExit(1)
+        ok, message, token = verify_license(license_key)
+        if not ok:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("License Activation", message)
+            root.destroy()
+            raise SystemExit(1)
+
+        save_local_activation(token)
 
     from app import app
 
-    server_thread = threading.Thread(
-        target=run_server,
-        daemon=True
-    )
+    server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-
-    # Wait for Flask to start
     time.sleep(2)
 
     webview.create_window(
@@ -76,7 +69,6 @@ if __name__ == "__main__":
         width=1400,
         height=850,
         min_size=(1100, 700),
-        resizable=True
+        resizable=True,
     )
-
     webview.start()
