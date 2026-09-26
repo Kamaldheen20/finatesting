@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+
 import webview
 from dotenv import load_dotenv
 
@@ -17,13 +18,7 @@ webview.settings["ALLOW_DOWNLOADS"] = True
 
 
 def run_server():
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False,
-        use_reloader=False,
-        threaded=True,
-    )
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":
