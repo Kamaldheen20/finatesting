@@ -34,6 +34,18 @@ class Admin(UserMixin, db.Model):
     )
 
 # ==========================
+# COMPANY SETTINGS TABLE
+# ==========================
+
+class CompanySettings(db.Model):
+    __tablename__ = "company_settings"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    company_name = db.Column(db.String(200))
+    address = db.Column(db.String(500))
+    phone = db.Column(db.String(50))
+
+# ==========================
 # CUSTOMER TABLE
 # ==========================
 
