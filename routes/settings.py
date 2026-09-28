@@ -16,3 +16,30 @@ def register(app):
 
     @app.route("/company_settings", methods=["GET", "POST"])
     @login_required
+    def company_settings():
+        settings = CompanySettings.query.filter_by(user_id=current_user.id).first()
+    
+        if not settings:
+            settings = CompanySettings(user_id=current_user.id)
+            db.session.add(settings)
+            db.session.commit()
+    
+        if request.method == "POST":
+            settings.company_name = request.form["company_name"]
+            settings.address = request.form["address"]
+            settings.phone = request.form["phone"]
+    
+            try:
+                db.session.commit()
+                flash("Settings Saved Successfully")
+            except Exception as e:
+                db.session.rollback()
+                flash(f"Error saving settings: {str(e)}", "danger")
+            return redirect(url_for("company_settings"))
+    
+        return render_template("company_settings.html", settings=settings)
+    
+    
+    # ==========================
+    # LOGOUT
+    # ==========================
