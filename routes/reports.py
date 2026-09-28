@@ -16,6 +16,50 @@ def register(app):
 
     @app.route("/daily_report")
     @login_required
+    def daily_report():
+        selected_date = request.args.get(
+            "date",
+            datetime.now().strftime("%Y-%m-%d")
+        )
+    
+        payments = Payment.query.filter_by(
+            payment_date=selected_date,
+            user_id=current_user.id
+        ).all()
+    
+        total_collection = sum(payment.amount for payment in payments)
+    
+        return render_template(
+            "daily_report.html",
+            payments=payments,
+            selected_date=selected_date,
+            total_collection=total_collection
+        )
+    
+    
+    # ==========================
+    # PENDING REPORT
+    # ==========================
 
     @app.route("/pending_report")
     @login_required
+    def pending_report():
+        customers = Customer.query.filter(
+            Customer.remaining_balance > 0,
+            Customer.user_id == current_user.id
+        ).all()
+    
+        total_pending = sum(
+            customer.remaining_balance for customer in customers
+        )
+    
+        return render_template(
+            "pending_report.html",
+            customers=customers,
+            total_pending=total_pending
+        )
+    
+    
+    # ==========================
+    # EXPORT DAILY REPORT EXCEL
+    # ==========================
