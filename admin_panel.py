@@ -85,12 +85,20 @@ def admin_panel():
         return redirect(url_for("admin_login"))
     conn = connect()
     try:
-        rows = conn.execute("""
-            SELECT l.*, COUNT(d.id) AS device_count
-            FROM licenses l LEFT JOIN devices d ON d.license_id=l.id
-            GROUP BY l.id ORDER BY l.id DESC
-        """).fetchall()
-        return render_template_string(ADMIN_HTML, licenses=rows, message=request.args.get("message",""))
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT l.*, COUNT(d.id) AS device_count
+                FROM licenses l
+                LEFT JOIN devices d ON d.license_id = l.id
+                GROUP BY l.id
+                ORDER BY l.id DESC
+            """)
+            rows = cur.fetchall()
+        return render_template_string(
+            ADMIN_HTML,
+            licenses=rows,
+            message=request.args.get("message", ""),
+        )
     finally:
         conn.close()
 
@@ -98,30 +106,39 @@ def admin_panel():
 def admin_create_web():
     if not logged_in():
         return redirect(url_for("admin_login"))
-    customer_name = request.form.get("customer_name","").strip()
+
+    customer_name = request.form.get("customer_name", "").strip()
     try:
-        max_devices = int(request.form.get("max_devices","1"))
+        max_devices = int(request.form.get("max_devices", "1"))
     except ValueError:
         max_devices = 1
+
     if not customer_name or max_devices < 1:
         return redirect(url_for("admin_panel", message="Invalid customer name or device limit."))
+
     import secrets
     from datetime import datetime, timezone
     from license_test_server import key_hash
+
     license_key = "FIN-" + secrets.token_hex(9).upper()
     conn = connect()
     try:
-        conn.execute(
-            "INSERT INTO licenses (license_hash, customer_name, max_devices, status, created_at) VALUES (?, ?, ?, 'active', ?)",
-            (key_hash(license_key), customer_name, max_devices, datetime.now(timezone.utc).isoformat())
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO licenses
+                   (license_hash, customer_name, max_devices, status, created_at)
+                   VALUES (%s, %s, %s, 'active', %s)""",
+                (key_hash(license_key), customer_name, max_devices, datetime.now(timezone.utc)),
+            )
         conn.commit()
     finally:
         conn.close()
-    return render_template_string(
-        ADMIN_HTML,
-        licenses=[],
-        message=f"License created: {license_key} — copy this key now; only its hash is stored."
+
+    return redirect(
+        url_for(
+            "admin_panel",
+            message=f"License created: {license_key} — copy this key now; only its hash is stored.",
+        )
     )
 
 @app.post("/admin/license/<int:license_id>/revoke")
@@ -130,7 +147,8 @@ def admin_revoke(license_id):
         return redirect(url_for("admin_login"))
     conn = connect()
     try:
-        conn.execute("UPDATE licenses SET status='revoked' WHERE id=?", (license_id,))
+        with conn.cursor() as cur:
+            cur.execute("UPDATE licenses SET status='revoked' WHERE id=%s", (license_id,))
         conn.commit()
     finally:
         conn.close()
@@ -142,7 +160,8 @@ def admin_reset_device(license_id):
         return redirect(url_for("admin_login"))
     conn = connect()
     try:
-        conn.execute("DELETE FROM devices WHERE license_id=?", (license_id,))
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM devices WHERE license_id=%s", (license_id,))
         conn.commit()
     finally:
         conn.close()
