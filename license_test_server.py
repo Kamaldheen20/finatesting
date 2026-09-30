@@ -24,7 +24,10 @@ def connect():
     # pgbouncer never reach psycopg 3.
     from urllib.parse import unquote, urlsplit
 
-    parts = urlsplit(LICENSE_DATABASE_URL)
+    raw_url = LICENSE_DATABASE_URL.strip().strip('"').strip("'")
+    if raw_url.startswith("LICENSE_DATABASE_URL=") or raw_url.startswith("DATABASE_URL="):
+        raw_url = raw_url.split("=", 1)[1].strip().strip('"').strip("'")
+    parts = urlsplit(raw_url)
     if not (parts.scheme.startswith("postgresql") or parts.scheme == "postgres"):
         raise RuntimeError("LICENSE_DATABASE_URL must be a PostgreSQL connection URL.")
     if not parts.hostname:
