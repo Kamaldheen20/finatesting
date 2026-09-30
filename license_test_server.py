@@ -19,7 +19,13 @@ ADMIN_KEY = os.getenv("LICENSE_ADMIN_KEY", "test-admin-key")
 def connect():
     if not LICENSE_DATABASE_URL:
         raise RuntimeError("LICENSE_DATABASE_URL is not configured.")
-    return psycopg.connect(LICENSE_DATABASE_URL, row_factory=dict_row)
+    # Supabase pooler URLs may include pgbouncer=true, which psycopg 3 rejects.
+    # The pooler is already selected by the hostname/port, so remove that URI option.
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    parts = urlsplit(LICENSE_DATABASE_URL)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "pgbouncer"]
+    clean_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return psycopg.connect(clean_url, row_factory=dict_row)
 
 
 def init_db():
