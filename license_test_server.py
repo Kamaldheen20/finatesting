@@ -216,9 +216,13 @@ def activate():
                     "UPDATE devices SET last_seen = %s WHERE id = %s",
                     (datetime.now(timezone.utc), device["id"]),
                 )
+
+            # Sign before committing the device change. If signing fails,
+            # the transaction rolls back and the device slot is not consumed.
+            token = make_token(row, device_id, app_version)
+
         conn.commit()
 
-    token = make_token(row, device_id, app_version)
     return jsonify(
         success=True,
         message=f"License activated for {row['customer_name']}",
