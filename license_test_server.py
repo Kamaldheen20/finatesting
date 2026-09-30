@@ -25,7 +25,7 @@ def connect():
     from urllib.parse import unquote, urlsplit
 
     parts = urlsplit(LICENSE_DATABASE_URL)
-    if not parts.scheme.startswith("postgresql") and parts.scheme != "postgres":
+    if not (parts.scheme.startswith("postgresql") or parts.scheme == "postgres"):
         raise RuntimeError("LICENSE_DATABASE_URL must be a PostgreSQL connection URL.")
     if not parts.hostname:
         raise RuntimeError("LICENSE_DATABASE_URL is missing the database host.")
