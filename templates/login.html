@@ -27,6 +27,7 @@
         display: block;
         margin: 0 auto 10px;
         object-fit: contain;
+        border-radius: 12px;
     }
 
     .card-header{
@@ -65,10 +66,19 @@
             <div class="card shadow-lg login-card">
 
                 <div class="card-header text-center pt-4">
-                    <img
-                        src="{{ url_for('static', filename='images/finance-collection-logo.svg') }}"
+                    <video
                         class="logo"
-                        alt="Finance Collection Management System logo">
+                        autoplay
+                        muted
+                        loop
+                        playsinline
+                        preload="auto"
+                        aria-label="KARA Collection Manager logo">
+                        <source
+                            src="{{ url_for('static', filename='images/KARA Collection Manager logo.mp4') }}"
+                            type="video/mp4">
+                        Your browser does not support the video logo.
+                    </video>
 
                     <h3 class="app-title">
                         Finance Collection Manager
