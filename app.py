@@ -36,6 +36,8 @@ from werkzeug.security import (
     check_password_hash
 )
 
+from itsdangerous import URLSafeTimedSerializer
+
 from openpyxl import Workbook
 from models import (
     db,
@@ -2988,9 +2990,16 @@ def mobile_login():
             "message": "Invalid Username or Password"
         }), 401
 
+    token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
+    access_token = token_serializer.dumps({
+        "user_id": admin.id,
+        "username": admin.username,
+    })
+
     return jsonify({
         "success": True,
         "message": "Login successful.",
+        "accessToken": access_token,
         "user": {
             "id": admin.id,
             "username": admin.username,
