@@ -2964,6 +2964,42 @@ def company_settings():
 
 
 # ==========================
+# MOBILE API - AUTHENTICATION
+# ==========================
+
+@app.route("/api/mobile/login", methods=["POST"])
+def mobile_login():
+    data = request.get_json(silent=True) or {}
+
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+
+    if not username or not password:
+        return jsonify({
+            "success": False,
+            "message": "Username and password are required."
+        }), 400
+
+    admin = Admin.query.filter_by(username=username).first()
+
+    if not admin or not check_password_hash(admin.password, password):
+        return jsonify({
+            "success": False,
+            "message": "Invalid Username or Password"
+        }), 401
+
+    return jsonify({
+        "success": True,
+        "message": "Login successful.",
+        "user": {
+            "id": admin.id,
+            "username": admin.username,
+            "mobile": admin.mobile,
+        }
+    }), 200
+
+
+# ==========================
 # LOGOUT
 # ==========================
 
