@@ -3009,6 +3009,118 @@ def mobile_login():
 
 
 # ==========================
+# MOBILE DASHBOARD API
+# ==========================
+
+def _get_mobile_admin():
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, "Authentication token is required."
+
+    token = auth_header[7:].strip()
+    if not token:
+        return None, "Authentication token is required."
+
+    try:
+        token_serializer = URLSafeTimedSerializer(app.config["SECRET_KEY"])
+        payload = token_serializer.loads(token, max_age=86400)
+        user_id = int(payload.get("user_id"))
+    except Exception:
+        return None, "Invalid or expired authentication token."
+
+    admin = db.session.get(Admin, user_id)
+    if not admin:
+        return None, "User account not found."
+
+    return admin, None
+
+
+@app.route("/api/mobile/dashboard", methods=["GET"])
+def mobile_dashboard():
+    admin, error = _get_mobile_admin()
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    from sqlalchemy import func
+
+    working_date = request.args.get(
+        "date",
+        datetime.now().strftime("%Y-%m-%d"),
+    ).strip()
+
+    current_month = working_date[:7]
+    customers = Customer.query.filter_by(user_id=admin.id).all()
+
+    total_customers = len(customers)
+    active_customers = sum(1 for customer in customers if customer.status == "Active")
+    closed_customers = sum(1 for customer in customers if customer.status == "Closed")
+    total_loan = sum(customer.loan_amount or 0 for customer in customers)
+    total_paid = sum(customer.total_paid or 0 for customer in customers)
+    total_balance = sum(customer.remaining_balance or 0 for customer in customers)
+
+    today_collection = db.session.query(
+        func.coalesce(func.sum(Payment.amount), 0)
+    ).filter(
+        Payment.user_id == admin.id,
+        Payment.payment_date == working_date,
+    ).scalar() or 0
+
+    month_collection = db.session.query(
+        func.coalesce(func.sum(Payment.amount), 0)
+    ).filter(
+        Payment.user_id == admin.id,
+        Payment.payment_date.like(f"{current_month}%"),
+    ).scalar() or 0
+
+    today_payments = db.session.query(
+        Payment.customer_id,
+        func.coalesce(func.sum(Payment.amount), 0),
+    ).filter(
+        Payment.user_id == admin.id,
+        Payment.payment_date == working_date,
+    ).group_by(Payment.customer_id).all()
+
+    paid_by_customer = {
+        customer_id: float(amount or 0)
+        for customer_id, amount in today_payments
+    }
+
+    today_due = sum(
+        max(
+            0,
+            float(customer.daily_due or 0)
+            - paid_by_customer.get(customer.customer_id, 0),
+        )
+        for customer in customers
+        if customer.status == "Active"
+    )
+
+    return jsonify({
+        "success": True,
+        "workingDate": working_date,
+        "user": {
+            "id": admin.id,
+            "username": admin.username,
+            "mobile": admin.mobile,
+        },
+        "stats": {
+            "totalCustomers": total_customers,
+            "activeCustomers": active_customers,
+            "closedCustomers": closed_customers,
+            "totalLoan": float(total_loan),
+            "totalPaid": float(total_paid),
+            "totalBalance": float(total_balance),
+            "todayCollection": float(today_collection),
+            "monthCollection": float(month_collection),
+            "todayDue": float(today_due),
+        },
+    }), 200
+
+
+# ==========================
 # LOGOUT
 # ==========================
 
