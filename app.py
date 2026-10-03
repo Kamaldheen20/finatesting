@@ -3503,6 +3503,141 @@ def mobile_customer_amount_update():
     }), 201
 
 # ==========================
+# MOBILE CUSTOMER AMOUNT UPDATE - DELETE / REVERSE
+# ==========================
+
+@app.route("/api/mobile/customer-amount-update", methods=["DELETE"])
+def mobile_customer_amount_delete():
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    data = request.get_json(silent=True) or {}
+
+    customer_id = str(data.get("customer_id", "")).strip()
+    payment_date = str(data.get("payment_date", "")).strip()
+
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "message": "Customer registration number is required.",
+        }), 400
+
+    if not payment_date:
+        return jsonify({
+            "success": False,
+            "message": "Payment Date is required.",
+        }), 400
+
+    try:
+        datetime.strptime(payment_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid Payment Date.",
+        }), 400
+
+    try:
+        customer = Customer.query.filter_by(
+            customer_id=customer_id,
+            user_id=admin.id,
+        ).with_for_update().first()
+
+        if not customer:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Customer not found. "
+                    "Please check the registration number."
+                ),
+            }), 404
+
+        payment = Payment.query.filter_by(
+            customer_id=customer.customer_id,
+            payment_date=payment_date,
+            user_id=admin.id,
+        ).first()
+
+        if not payment:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": (
+                    "No collection was found for this "
+                    "customer on this date."
+                ),
+            }), 404
+
+        deleted_amount = float(payment.amount or 0)
+
+        db.session.delete(payment)
+        db.session.flush()
+
+        from sqlalchemy import func
+
+        recalculated_total_paid = db.session.query(
+            func.coalesce(func.sum(Payment.amount), 0)
+        ).filter(
+            Payment.customer_id == customer.customer_id,
+            Payment.user_id == admin.id,
+        ).scalar() or 0
+
+        customer.total_paid = float(recalculated_total_paid)
+        customer.remaining_balance = (
+            float(customer.loan_amount or 0)
+            - customer.total_paid
+        )
+
+        if customer.remaining_balance <= 0:
+            customer.remaining_balance = 0
+            customer.status = "Closed"
+        else:
+            customer.status = "Active"
+
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Error deleting collection through mobile API."
+        )
+        return jsonify({
+            "success": False,
+            "message": (
+                "Something went wrong while deleting "
+                "the collection. Please try again."
+            ),
+        }), 500
+
+    return jsonify({
+        "success": True,
+        "message": (
+            "Collection deleted and customer balance "
+            "restored successfully."
+        ),
+        "payment": {
+            "id": payment.id,
+            "customer_id": customer.customer_id,
+            "payment_date": payment_date,
+            "amount": deleted_amount,
+        },
+        "customer": {
+            "customer_id": customer.customer_id,
+            "total_paid": float(customer.total_paid or 0),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+            "status": customer.status or "Active",
+        },
+    }), 200
+
+
+# ==========================
 # LOGOUT
 # ==========================
 
