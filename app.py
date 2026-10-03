@@ -3678,6 +3678,125 @@ with app.app_context():
             db.session.rollback()
 
 
+
+# ==========================
+# MOBILE CUSTOMER LEDGER API
+# ==========================
+
+@app.route("/api/mobile/customer-ledger", methods=["GET"])
+def mobile_customer_ledger():
+    """Return customer search results and, when selected, payment history."""
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    customer_id = request.args.get("customer_id", "").strip()
+    search = request.args.get("search", "").strip()
+
+    # ---------------------------------------------------------------
+    # Customer search / list
+    # ---------------------------------------------------------------
+    if not customer_id:
+        query = Customer.query.filter_by(user_id=admin.id)
+
+        if search:
+            from sqlalchemy import or_
+
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                or_(
+                    Customer.customer_id.ilike(search_pattern),
+                    Customer.name.ilike(search_pattern),
+                    Customer.mobile.ilike(search_pattern),
+                )
+            )
+
+        customers = query.order_by(Customer.customer_id.asc()).limit(50).all()
+
+        return jsonify({
+            "success": True,
+            "customers": [
+                {
+                    "id": customer.id,
+                    "customer_id": customer.customer_id,
+                    "name": customer.name or "",
+                    "mobile": customer.mobile or "",
+                    "loan_amount": float(customer.loan_amount or 0),
+                    "daily_due": float(customer.daily_due or 0),
+                    "total_paid": float(customer.total_paid or 0),
+                    "remaining_balance": float(
+                        customer.remaining_balance or 0
+                    ),
+                    "status": customer.status or "Active",
+                    "start_date": customer.start_date or "",
+                    "end_date": customer.end_date or "",
+                }
+                for customer in customers
+            ],
+        }), 200
+
+    # ---------------------------------------------------------------
+    # Selected customer + ledger
+    # ---------------------------------------------------------------
+    customer = Customer.query.filter_by(
+        customer_id=customer_id,
+        user_id=admin.id,
+    ).first()
+
+    if not customer:
+        return jsonify({
+            "success": False,
+            "message": "Customer not found. Please check the registration number.",
+        }), 404
+
+    payments = Payment.query.filter_by(
+        customer_id=customer.customer_id,
+        user_id=admin.id,
+    ).order_by(
+        Payment.payment_date.desc(),
+        Payment.id.desc(),
+    ).all()
+
+    return jsonify({
+        "success": True,
+        "customer": {
+            "id": customer.id,
+            "customer_id": customer.customer_id,
+            "name": customer.name or "",
+            "mobile": customer.mobile or "",
+            "address": customer.address or "",
+            "loan_amount": float(customer.loan_amount or 0),
+            "daily_due": float(customer.daily_due or 0),
+            "total_paid": float(customer.total_paid or 0),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+            "status": customer.status or "Active",
+            "start_date": customer.start_date or "",
+            "end_date": customer.end_date or "",
+        },
+        "payments": [
+            {
+                "id": payment.id,
+                "payment_date": payment.payment_date,
+                "amount": float(payment.amount or 0),
+            }
+            for payment in payments
+        ],
+        "summary": {
+            "payment_count": len(payments),
+            "total_paid": float(customer.total_paid or 0),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+        },
+    }), 200
+
+
         # ==========================
         # RUN APP
         # ==========================
