@@ -3263,6 +3263,245 @@ def mobile_add_customer():
     }), 201
 
 
+
+# ==========================
+# MOBILE CUSTOMER AMOUNT UPDATE API
+# ==========================
+
+@app.route("/api/mobile/customer-amount-update/lookup", methods=["POST"])
+def mobile_customer_amount_lookup():
+    admin, error = _get_mobile_admin()
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    data = request.get_json(silent=True) or {}
+
+    customer_id = str(data.get("customer_id", "")).strip()
+    working_date = str(data.get("working_date", "")).strip()
+
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "message": "Customer registration number is required.",
+        }), 400
+
+    customer = Customer.query.filter_by(
+        customer_id=customer_id,
+        user_id=admin.id,
+    ).first()
+
+    if not customer:
+        return jsonify({
+            "success": False,
+            "message": "Customer not found. Please check the registration number.",
+        }), 404
+
+    already_collected = False
+
+    if working_date:
+        try:
+            datetime.strptime(working_date, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid Working Date.",
+            }), 400
+
+        already_collected = Payment.query.filter_by(
+            customer_id=customer.customer_id,
+            payment_date=working_date,
+            user_id=admin.id,
+        ).first() is not None
+
+    overdue_days = 0
+
+    try:
+        daily_due = float(customer.daily_due or 0)
+
+        if customer.start_date and daily_due > 0:
+            start = datetime.strptime(
+                str(customer.start_date),
+                "%Y-%m-%d",
+            )
+
+            today = datetime.now().replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+
+            if today < start:
+                days_passed = 0
+            else:
+                days_passed = (today - start).days + 1
+
+            expected_paid = daily_due * days_passed
+            overdue_amount = expected_paid - float(
+                customer.total_paid or 0
+            )
+
+            if overdue_amount > 0:
+                overdue_days = int(
+                    overdue_amount // daily_due
+                )
+
+    except (ValueError, TypeError):
+        overdue_days = 0
+
+    return jsonify({
+        "success": True,
+        "customer": {
+            "id": customer.id,
+            "customer_id": customer.customer_id,
+            "name": customer.name or "",
+            "daily_due": float(customer.daily_due or 0),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+            "status": customer.status or "Active",
+            "overdue_days": overdue_days,
+            "already_collected": already_collected,
+        },
+    }), 200
+
+
+@app.route("/api/mobile/customer-amount-update", methods=["POST"])
+def mobile_customer_amount_update():
+    admin, error = _get_mobile_admin()
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    data = request.get_json(silent=True) or {}
+
+    customer_id = str(data.get("customer_id", "")).strip()
+    payment_date = str(data.get("payment_date", "")).strip()
+    raw_amount = data.get("amount", "")
+
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "message": "Customer registration number is required.",
+        }), 400
+
+    if not payment_date:
+        return jsonify({
+            "success": False,
+            "message": "Working Date is required.",
+        }), 400
+
+    try:
+        datetime.strptime(payment_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid Working Date.",
+        }), 400
+
+    try:
+        amount = float(raw_amount)
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Please enter a valid amount.",
+        }), 400
+
+    if amount <= 0:
+        return jsonify({
+            "success": False,
+            "message": "Amount must be greater than zero.",
+        }), 400
+
+    try:
+        customer = Customer.query.filter_by(
+            customer_id=customer_id,
+            user_id=admin.id,
+        ).with_for_update().first()
+
+        if not customer:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": "Customer not found. Please check the registration number.",
+            }), 404
+
+        existing_payment = Payment.query.filter_by(
+            customer_id=customer.customer_id,
+            payment_date=payment_date,
+            user_id=admin.id,
+        ).with_for_update().first()
+
+        if existing_payment:
+            db.session.rollback()
+            return jsonify({
+                "success": False,
+                "message": (
+                    f"{customer.customer_id} has already been "
+                    "collected for this date."
+                ),
+            }), 409
+
+        payment = Payment(
+            customer_id=customer.customer_id,
+            payment_date=payment_date,
+            amount=amount,
+            user_id=admin.id,
+        )
+
+        db.session.add(payment)
+
+        customer.total_paid = (
+            float(customer.total_paid or 0) + amount
+        )
+
+        customer.remaining_balance = (
+            float(customer.loan_amount or 0)
+            - customer.total_paid
+        )
+
+        if customer.remaining_balance <= 0:
+            customer.remaining_balance = 0
+            customer.status = "Closed"
+        else:
+            customer.status = "Active"
+
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        logger.exception(
+            "Error saving collection through mobile API."
+        )
+        return jsonify({
+            "success": False,
+            "message": "Something went wrong while saving. Please try again.",
+        }), 500
+
+    return jsonify({
+        "success": True,
+        "message": "Collection saved successfully.",
+        "payment": {
+            "id": payment.id,
+            "customer_id": payment.customer_id,
+            "payment_date": payment.payment_date,
+            "amount": float(payment.amount or 0),
+        },
+        "customer": {
+            "customer_id": customer.customer_id,
+            "total_paid": float(customer.total_paid or 0),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+            "status": customer.status or "Active",
+        },
+    }), 201
+
 # ==========================
 # LOGOUT
 # ==========================
