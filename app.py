@@ -3789,6 +3789,549 @@ def mobile_collection_sheet():
 
 
 # ==========================
+# MOBILE MONTHLY COLLECTION SHEET PDF API
+# ==========================
+
+@app.route("/api/mobile/collection-sheet-pdf", methods=["GET"])
+def mobile_collection_sheet_pdf():
+    """Generate the monthly collection sheet PDF for the logged-in mobile user."""
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    selected_month = request.args.get(
+        "month",
+        datetime.now().strftime("%Y-%m"),
+    ).strip()
+
+    try:
+        selected_month = datetime.strptime(
+            selected_month,
+            "%Y-%m",
+        ).strftime("%Y-%m")
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid month. Use YYYY-MM format.",
+        }), 400
+
+    try:
+        from collections import defaultdict
+        from sqlalchemy import func, cast, Integer
+        from reportlab.platypus import (
+            SimpleDocTemplate,
+            Paragraph,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A3, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+
+        customers = Customer.query.filter_by(
+            user_id=admin.id
+        ).all()
+        customers = _sort_customers(customers)
+
+        day_expr = cast(
+            func.substr(Payment.payment_date, 9, 2),
+            Integer,
+        )
+
+        payment_query = (
+            db.session.query(
+                Payment.customer_id,
+                day_expr.label("day"),
+                func.sum(Payment.amount).label("day_total"),
+            )
+            .filter(
+                Payment.user_id == admin.id,
+                Payment.payment_date.like(f"{selected_month}%"),
+            )
+            .group_by(
+                Payment.customer_id,
+                day_expr,
+            )
+        )
+
+        payments_by_customer = defaultdict(dict)
+        day_totals = {
+            day: 0.0
+            for day in range(1, 32)
+        }
+        month_collection = 0.0
+
+        for customer_id, day, day_total in payment_query.yield_per(500):
+            if day is None or not 1 <= int(day) <= 31:
+                continue
+
+            amount = float(day_total or 0)
+            day = int(day)
+
+            payments_by_customer[
+                customer_id
+            ][day] = amount
+
+            day_totals[day] += amount
+            month_collection += amount
+
+        _register_pdf_fonts()
+
+        _, latin_font, bold_font, _ = _register_pdf_fonts()
+
+        buffer = io.BytesIO()
+
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=landscape(A3),
+            rightMargin=18,
+            leftMargin=18,
+            topMargin=18,
+            bottomMargin=18,
+            title=f"Monthly Collection Sheet - {selected_month}",
+            author="Finance Collection Management System",
+        )
+
+        styles = getSampleStyleSheet()
+
+        normal_style = ParagraphStyle(
+            "MobileCollectionNormal",
+            parent=styles["Normal"],
+            fontName=latin_font,
+            fontSize=7,
+            leading=8,
+            alignment=TA_CENTER,
+        )
+
+        header_style = ParagraphStyle(
+            "MobileCollectionHeader",
+            parent=normal_style,
+            fontName=bold_font,
+            fontSize=7,
+            leading=8,
+            alignment=TA_CENTER,
+        )
+
+        title_style = ParagraphStyle(
+            "MobileCollectionTitle",
+            parent=normal_style,
+            fontName=bold_font,
+            fontSize=15,
+            leading=18,
+            alignment=TA_CENTER,
+        )
+
+        small_style = ParagraphStyle(
+            "MobileCollectionSmall",
+            parent=normal_style,
+            fontSize=7,
+            leading=8,
+            alignment=TA_CENTER,
+        )
+
+        elements = []
+
+        company = {
+            "company_name": "",
+            "address": "",
+            "phone": "",
+        }
+
+        try:
+            settings = CompanySettings.query.filter_by(
+                user_id=admin.id
+            ).first()
+
+            if settings:
+                company = {
+                    "company_name": (
+                        settings.company_name or ""
+                    ).strip(),
+                    "address": (
+                        settings.address or ""
+                    ).strip(),
+                    "phone": (
+                        settings.phone or ""
+                    ).strip(),
+                }
+        except Exception:
+            logger.exception(
+                "Could not load company settings for collection sheet PDF."
+            )
+
+        if company["company_name"]:
+            company_style = ParagraphStyle(
+                "MobileCollectionCompany",
+                parent=normal_style,
+                fontName=bold_font,
+                fontSize=16,
+                leading=19,
+                alignment=TA_CENTER,
+                spaceAfter=3,
+            )
+            elements.append(
+                Paragraph(
+                    _pdf_text(company["company_name"]),
+                    company_style,
+                )
+            )
+
+        contact_parts = [
+            value
+            for value in (
+                company["address"],
+                company["phone"],
+            )
+            if value
+        ]
+
+        if contact_parts:
+            contact_style = ParagraphStyle(
+                "MobileCollectionContact",
+                parent=normal_style,
+                fontSize=8,
+                leading=10,
+                alignment=TA_CENTER,
+                spaceAfter=5,
+            )
+            elements.append(
+                Paragraph(
+                    _pdf_text(" | ".join(contact_parts)),
+                    contact_style,
+                )
+            )
+
+        elements.append(
+            Paragraph(
+                _pdf_text(
+                    f"Monthly Collection Sheet - {selected_month}"
+                ),
+                title_style,
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+        def money(value):
+            return f"{float(value or 0):,.2f}"
+
+        headers = [
+            "ID",
+            "Name",
+            "Loan",
+        ]
+
+        headers.extend(
+            str(day)
+            for day in range(1, 32)
+        )
+
+        headers.extend([
+            "Month Total",
+            "Total Paid",
+            "Balance",
+            "Status",
+        ])
+
+        table_data = [
+            [
+                Paragraph(
+                    _pdf_text(header),
+                    header_style,
+                )
+                for header in headers
+            ]
+        ]
+
+        for customer in customers:
+            cust_days = payments_by_customer.get(
+                customer.customer_id,
+                {},
+            )
+
+            month_total = float(
+                sum(cust_days.values())
+            )
+
+            row = [
+                Paragraph(
+                    _pdf_text(
+                        customer.customer_id or ""
+                    ),
+                    normal_style,
+                ),
+                Paragraph(
+                    _pdf_text(
+                        customer.name or ""
+                    ),
+                    normal_style,
+                ),
+                Paragraph(
+                    _pdf_text(
+                        money(customer.loan_amount)
+                    ),
+                    normal_style,
+                ),
+            ]
+
+            for day in range(1, 32):
+                value = cust_days.get(day)
+
+                row.append(
+                    Paragraph(
+                        _pdf_text(
+                            money(value)
+                            if value is not None
+                            else "-"
+                        ),
+                        small_style,
+                    )
+                )
+
+            row.extend([
+                Paragraph(
+                    _pdf_text(
+                        money(month_total)
+                    ),
+                    normal_style,
+                ),
+                Paragraph(
+                    _pdf_text(
+                        money(customer.total_paid)
+                    ),
+                    normal_style,
+                ),
+                Paragraph(
+                    _pdf_text(
+                        money(
+                            customer.remaining_balance
+                        )
+                    ),
+                    normal_style,
+                ),
+                Paragraph(
+                    _pdf_text(
+                        customer.status or "Active"
+                    ),
+                    normal_style,
+                ),
+            ])
+
+            table_data.append(row)
+
+        total_paid_all = float(
+            sum(
+                customer.total_paid or 0
+                for customer in customers
+            )
+        )
+
+        total_balance_all = float(
+            sum(
+                customer.remaining_balance or 0
+                for customer in customers
+            )
+        )
+
+        total_row = [
+            Paragraph(
+                _pdf_text(""),
+                header_style,
+            ),
+            Paragraph(
+                _pdf_text("DAY TOTAL"),
+                header_style,
+            ),
+            Paragraph(
+                _pdf_text(""),
+                header_style,
+            ),
+        ]
+
+        for day in range(1, 32):
+            total_row.append(
+                Paragraph(
+                    _pdf_text(
+                        money(day_totals[day])
+                    ),
+                    header_style,
+                )
+            )
+
+        total_row.extend([
+            Paragraph(
+                _pdf_text(
+                    money(month_collection)
+                ),
+                header_style,
+            ),
+            Paragraph(
+                _pdf_text(
+                    money(total_paid_all)
+                ),
+                header_style,
+            ),
+            Paragraph(
+                _pdf_text(
+                    money(total_balance_all)
+                ),
+                header_style,
+            ),
+            Paragraph(
+                _pdf_text(""),
+                header_style,
+            ),
+        ])
+
+        table_data.append(total_row)
+
+        column_widths = [
+            42,
+            72,
+            58,
+        ]
+
+        column_widths.extend(
+            [25] * 31
+        )
+
+        column_widths.extend([
+            65,
+            65,
+            65,
+            55,
+        ])
+
+        collection_table = Table(
+            table_data,
+            colWidths=column_widths,
+            repeatRows=1,
+            repeatCols=3,
+            hAlign="CENTER",
+        )
+
+        collection_table.setStyle(
+            TableStyle([
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.35,
+                    colors.HexColor("#9ca3af"),
+                ),
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#e5e7eb"),
+                ),
+                (
+                    "BACKGROUND",
+                    (0, -1),
+                    (-1, -1),
+                    colors.HexColor("#f3f4f6"),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (-1, 0),
+                    bold_font,
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE",
+                ),
+                (
+                    "ALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "CENTER",
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    2,
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    2,
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    3,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    3,
+                ),
+            ])
+        )
+
+        elements.append(collection_table)
+        elements.append(Spacer(1, 8))
+
+        elements.append(
+            Paragraph(
+                _pdf_text(
+                    "Month Collection: "
+                    f"₹{money(month_collection)}"
+                    "  |  Total Paid: "
+                    f"₹{money(total_paid_all)}"
+                    "  |  Total Balance: "
+                    f"₹{money(total_balance_all)}"
+                ),
+                ParagraphStyle(
+                    "MobileCollectionSummary",
+                    parent=normal_style,
+                    fontName=bold_font,
+                    fontSize=9,
+                    leading=11,
+                    alignment=TA_CENTER,
+                ),
+            )
+        )
+
+        doc.build(elements)
+
+        buffer.seek(0)
+
+        return send_file(
+            buffer,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=(
+                f"Monthly_Collection_{selected_month}.pdf"
+            ),
+        )
+
+    except Exception:
+        logger.exception(
+            "Error generating mobile monthly collection sheet PDF."
+        )
+        return jsonify({
+            "success": False,
+            "message": (
+                "Could not generate the monthly collection "
+                "sheet PDF. Please try again."
+            ),
+        }), 500
+
+
+# ==========================
 # LOGOUT
 # ==========================
 
