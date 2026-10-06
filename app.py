@@ -3639,6 +3639,82 @@ def mobile_customer_amount_delete():
 
 
 # ==========================
+# MOBILE DAILY REPORT API
+# ==========================
+
+@app.route("/api/mobile/daily-report", methods=["GET"])
+def mobile_daily_report():
+    """
+    Return the daily collection report for the authenticated
+    mobile application user.
+
+    Query parameter:
+        date=YYYY-MM-DD
+
+    If date is not supplied, today's date is used.
+    """
+
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    selected_date = request.args.get(
+        "date",
+        datetime.now().strftime("%Y-%m-%d")
+    ).strip()
+
+    try:
+        selected_date = datetime.strptime(
+            selected_date,
+            "%Y-%m-%d"
+        ).strftime("%Y-%m-%d")
+
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid date. Use YYYY-MM-DD.",
+        }), 400
+
+    payments = Payment.query.filter_by(
+        payment_date=selected_date,
+        user_id=admin.id
+    ).order_by(
+        Payment.id.asc()
+    ).all()
+
+    total_collection = sum(
+        float(payment.amount or 0)
+        for payment in payments
+    )
+
+    payment_items = []
+
+    for index, payment in enumerate(
+        payments,
+        start=1
+    ):
+        payment_items.append({
+            "no": index,
+            "id": payment.id,
+            "payment_date": payment.payment_date,
+            "customer_id": payment.customer_id,
+            "amount": float(payment.amount or 0),
+        })
+
+    return jsonify({
+        "success": True,
+        "date": selected_date,
+        "payments": payment_items,
+        "total_collection": total_collection,
+        "transaction_count": len(payment_items),
+    }), 200
+
+
+# ==========================
 # MOBILE COLLECTION SHEET API
 # ==========================
 
@@ -4867,4 +4943,3 @@ def mobile_customer_statement_pdf(customer_id):
                 "Please try again."
             ),
         }), 500
-
