@@ -3808,3 +3808,369 @@ if __name__ == "__main__":
         debug=False,
         use_reloader=False
     )
+
+# ==========================
+# MOBILE CUSTOMER STATEMENT PDF API
+# ==========================
+
+@app.route("/api/mobile/customer-statement-pdf/<customer_id>", methods=["GET"])
+def mobile_customer_statement_pdf(customer_id):
+    """Generate the same customer statement concept as the web ledger PDF."""
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    customer_id = str(customer_id or "").strip()
+
+    if not customer_id:
+        return jsonify({
+            "success": False,
+            "message": "Customer registration number is required.",
+        }), 400
+
+    customer = Customer.query.filter_by(
+        customer_id=customer_id,
+        user_id=admin.id,
+    ).first()
+
+    if not customer:
+        return jsonify({
+            "success": False,
+            "message": "Customer not found. Please check the registration number.",
+        }), 404
+
+    payments = Payment.query.filter_by(
+        customer_id=customer.customer_id,
+        user_id=admin.id,
+    ).order_by(
+        Payment.payment_date.asc(),
+        Payment.id.asc(),
+    ).all()
+
+    try:
+        from reportlab.platypus import (
+            SimpleDocTemplate,
+            Paragraph,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+
+        _register_pdf_fonts()
+
+        _, latin_font, bold_font, _ = _register_pdf_fonts()
+
+        buffer = io.BytesIO()
+
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=28,
+            leftMargin=28,
+            topMargin=28,
+            bottomMargin=28,
+            title=f"Customer Statement - {customer.customer_id}",
+            author="Finance Collection Management System",
+        )
+
+        styles = getSampleStyleSheet()
+
+        normal_style = ParagraphStyle(
+            "MobileStatementNormal",
+            parent=styles["Normal"],
+            fontName=latin_font,
+            fontSize=9,
+            leading=12,
+        )
+
+        label_style = ParagraphStyle(
+            "MobileStatementLabel",
+            parent=normal_style,
+            fontName=bold_font,
+            fontSize=9,
+            leading=12,
+        )
+
+        title_style = ParagraphStyle(
+            "MobileStatementTitle",
+            parent=normal_style,
+            fontName=bold_font,
+            fontSize=15,
+            leading=18,
+            alignment=TA_CENTER,
+        )
+
+        small_style = ParagraphStyle(
+            "MobileStatementSmall",
+            parent=normal_style,
+            fontSize=8,
+            leading=10,
+        )
+
+        elements = []
+
+        # Company header, using the same per-admin company settings as the
+        # existing PDF helpers, but without relying on Flask-Login current_user.
+        company = {
+            "company_name": "",
+            "address": "",
+            "phone": "",
+        }
+
+        try:
+            settings = CompanySettings.query.filter_by(
+                user_id=admin.id
+            ).first()
+
+            if settings:
+                company = {
+                    "company_name": (settings.company_name or "").strip(),
+                    "address": (settings.address or "").strip(),
+                    "phone": (settings.phone or "").strip(),
+                }
+        except Exception:
+            logger.exception(
+                "Could not load company settings for mobile statement PDF."
+            )
+
+        if company["company_name"]:
+            company_name_style = ParagraphStyle(
+                "MobileStatementCompany",
+                parent=normal_style,
+                fontName=bold_font,
+                fontSize=16,
+                leading=19,
+                alignment=TA_CENTER,
+                spaceAfter=3,
+            )
+            elements.append(
+                Paragraph(
+                    _pdf_text(company["company_name"]),
+                    company_name_style,
+                )
+            )
+
+        contact_parts = [
+            value for value in (
+                company["address"],
+                company["phone"],
+            )
+            if value
+        ]
+
+        if contact_parts:
+            contact_style = ParagraphStyle(
+                "MobileStatementContact",
+                parent=normal_style,
+                fontSize=9,
+                leading=12,
+                alignment=TA_CENTER,
+                spaceAfter=6,
+            )
+            elements.append(
+                Paragraph(
+                    _pdf_text(" | ".join(contact_parts)),
+                    contact_style,
+                )
+            )
+
+        elements.append(
+            Paragraph(
+                _pdf_text("Customer Statement"),
+                title_style,
+            )
+        )
+        elements.append(Spacer(1, 10))
+
+        def money(value):
+            return f"{float(value or 0):,.2f}"
+
+        details_data = [
+            [
+                Paragraph(_pdf_text("Customer ID"), label_style),
+                Paragraph(_pdf_text(customer.customer_id), normal_style),
+                Paragraph(_pdf_text("Customer Name"), label_style),
+                Paragraph(_pdf_text(customer.name or ""), normal_style),
+            ],
+            [
+                Paragraph(_pdf_text("Mobile"), label_style),
+                Paragraph(_pdf_text(customer.mobile or "-"), normal_style),
+                Paragraph(_pdf_text("Status"), label_style),
+                Paragraph(_pdf_text(customer.status or "Active"), normal_style),
+            ],
+            [
+                Paragraph(_pdf_text("Address"), label_style),
+                Paragraph(_pdf_text(customer.address or "-"), normal_style),
+                Paragraph(_pdf_text("Daily Due"), label_style),
+                Paragraph(_pdf_text(money(customer.daily_due)), normal_style),
+            ],
+            [
+                Paragraph(_pdf_text("Loan Amount"), label_style),
+                Paragraph(_pdf_text(money(customer.loan_amount)), normal_style),
+                Paragraph(_pdf_text("Total Paid"), label_style),
+                Paragraph(_pdf_text(money(customer.total_paid)), normal_style),
+            ],
+            [
+                Paragraph(_pdf_text("Remaining Balance"), label_style),
+                Paragraph(_pdf_text(money(customer.remaining_balance)), normal_style),
+                Paragraph(_pdf_text("Start Date"), label_style),
+                Paragraph(_pdf_text(customer.start_date or "-"), normal_style),
+            ],
+            [
+                Paragraph(_pdf_text("End Date"), label_style),
+                Paragraph(_pdf_text(customer.end_date or "-"), normal_style),
+                Paragraph(_pdf_text("Payment Count"), label_style),
+                Paragraph(_pdf_text(str(len(payments))), normal_style),
+            ],
+        ]
+
+        details_table = Table(
+            details_data,
+            colWidths=[82, 145, 82, 145],
+            repeatRows=0,
+        )
+
+        details_table.setStyle(
+            TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#9ca3af")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f3f4f6")),
+                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#f3f4f6")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ])
+        )
+
+        elements.append(details_table)
+        elements.append(Spacer(1, 14))
+
+        elements.append(
+            Paragraph(
+                _pdf_text("Payment History"),
+                ParagraphStyle(
+                    "MobileStatementSection",
+                    parent=normal_style,
+                    fontName=bold_font,
+                    fontSize=11,
+                    leading=14,
+                    spaceAfter=6,
+                ),
+            )
+        )
+
+        payment_rows = [
+            [
+                Paragraph(_pdf_text("S.No"), label_style),
+                Paragraph(_pdf_text("Payment Date"), label_style),
+                Paragraph(_pdf_text("Amount"), label_style),
+            ]
+        ]
+
+        for index, payment in enumerate(payments, start=1):
+            payment_rows.append([
+                Paragraph(_pdf_text(str(index)), normal_style),
+                Paragraph(_pdf_text(payment.payment_date or ""), normal_style),
+                Paragraph(_pdf_text(money(payment.amount)), normal_style),
+            ])
+
+        if not payments:
+            payment_rows.append([
+                Paragraph(_pdf_text("-"), normal_style),
+                Paragraph(_pdf_text("No payments recorded"), normal_style),
+                Paragraph(_pdf_text("0.00"), normal_style),
+            ])
+
+        payment_table = Table(
+            payment_rows,
+            colWidths=[55, 250, 149],
+            repeatRows=1,
+        )
+
+        payment_table.setStyle(
+            TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#9ca3af")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e5e7eb")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ])
+        )
+
+        elements.append(payment_table)
+        elements.append(Spacer(1, 12))
+
+        summary_rows = [
+            [
+                Paragraph(_pdf_text("Total Paid"), label_style),
+                Paragraph(_pdf_text(money(customer.total_paid)), normal_style),
+                Paragraph(_pdf_text("Remaining Balance"), label_style),
+                Paragraph(
+                    _pdf_text(money(customer.remaining_balance)),
+                    normal_style,
+                ),
+            ]
+        ]
+
+        summary_table = Table(
+            summary_rows,
+            colWidths=[100, 150, 130, 74],
+        )
+
+        summary_table.setStyle(
+            TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#9ca3af")),
+                ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#f3f4f6")),
+                ("BACKGROUND", (2, 0), (2, 0), colors.HexColor("#f3f4f6")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ])
+        )
+
+        elements.append(summary_table)
+
+        doc.build(elements)
+
+        buffer.seek(0)
+
+        safe_customer_id = re.sub(
+            r"[^A-Za-z0-9_-]+",
+            "_",
+            customer.customer_id,
+        ).strip("_") or "customer"
+
+        return send_file(
+            buffer,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=f"customer_statement_{safe_customer_id}.pdf",
+        )
+
+    except Exception:
+        logger.exception(
+            "Error generating mobile customer statement PDF."
+        )
+        return jsonify({
+            "success": False,
+            "message": (
+                "Could not generate the customer statement PDF. "
+                "Please try again."
+            ),
+        }), 500
+
