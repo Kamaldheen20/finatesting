@@ -3637,6 +3637,157 @@ def mobile_customer_amount_delete():
     }), 200
 
 
+
+# ==========================
+# MOBILE COLLECTION SHEET API
+# ==========================
+
+@app.route("/api/mobile/collection-sheet", methods=["GET"])
+def mobile_collection_sheet():
+    """Return the monthly collection matrix for the authenticated user."""
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    selected_month = request.args.get(
+        "month",
+        datetime.now().strftime("%Y-%m"),
+    ).strip()
+
+    try:
+        selected_month = datetime.strptime(
+            selected_month,
+            "%Y-%m",
+        ).strftime("%Y-%m")
+    except (ValueError, TypeError):
+        return jsonify({
+            "success": False,
+            "message": "Invalid month. Use YYYY-MM format.",
+        }), 400
+
+    from collections import defaultdict
+    from sqlalchemy import func, cast, Integer
+
+    customers = Customer.query.filter_by(
+        user_id=admin.id
+    ).all()
+    customers = _sort_customers(customers)
+
+    # The web sheet displays one amount per customer/day. If multiple
+    # payments exist for the same customer on the same date, sum them.
+    day_expr = cast(
+        func.substr(Payment.payment_date, 9, 2),
+        Integer,
+    )
+
+    payment_query = (
+        db.session.query(
+            Payment.customer_id,
+            day_expr.label("day"),
+            func.sum(Payment.amount).label("day_total"),
+        )
+        .filter(
+            Payment.user_id == admin.id,
+            Payment.payment_date.like(f"{selected_month}%"),
+        )
+        .group_by(
+            Payment.customer_id,
+            day_expr,
+        )
+    )
+
+    payments_by_customer = defaultdict(dict)
+    day_totals = {
+        day: 0.0
+        for day in range(1, 32)
+    }
+
+    month_collection = 0.0
+
+    for customer_id, day, day_total in payment_query.yield_per(500):
+        if day is None or not 1 <= int(day) <= 31:
+            continue
+
+        amount = float(day_total or 0)
+        day = int(day)
+
+        payments_by_customer[customer_id][day] = amount
+        day_totals[day] += amount
+        month_collection += amount
+
+    customer_rows = []
+
+    for customer in customers:
+        cust_days = payments_by_customer.get(
+            customer.customer_id,
+            {},
+        )
+
+        month_total = float(
+            sum(cust_days.values())
+        )
+
+        customer_rows.append({
+            "customer_id": customer.customer_id,
+            "name": customer.name or "",
+            "loan_amount": float(
+                customer.loan_amount or 0
+            ),
+            "daily_due": float(
+                customer.daily_due or 0
+            ),
+            "days": {
+                str(day): (
+                    float(cust_days[day])
+                    if day in cust_days
+                    else None
+                )
+                for day in range(1, 32)
+            },
+            "month_total": month_total,
+            "total_paid": float(
+                customer.total_paid or 0
+            ),
+            "remaining_balance": float(
+                customer.remaining_balance or 0
+            ),
+            "status": customer.status or "Active",
+        })
+
+    total_paid_all = float(
+        sum(
+            customer.total_paid or 0
+            for customer in customers
+        )
+    )
+
+    total_balance_all = float(
+        sum(
+            customer.remaining_balance or 0
+            for customer in customers
+        )
+    )
+
+    return jsonify({
+        "success": True,
+        "month": selected_month,
+        "days": list(range(1, 32)),
+        "customers": customer_rows,
+        "day_totals": {
+            str(day): float(day_totals[day])
+            for day in range(1, 32)
+        },
+        "month_collection": float(month_collection),
+        "total_paid_all": total_paid_all,
+        "total_balance_all": total_balance_all,
+        "customer_count": len(customer_rows),
+    }), 200
+
+
 # ==========================
 # LOGOUT
 # ==========================
