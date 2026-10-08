@@ -3715,6 +3715,54 @@ def mobile_daily_report():
 
 
 # ==========================
+# ==========================
+# MOBILE PENDING REPORT API
+# ==========================
+
+@app.route("/api/mobile/pending-report", methods=["GET"])
+def mobile_pending_report():
+    """Return customers with a positive remaining balance for the mobile app."""
+
+    admin, error = _get_mobile_admin()
+
+    if error:
+        return jsonify({
+            "success": False,
+            "message": error,
+        }), 401
+
+    customers = Customer.query.filter(
+        Customer.remaining_balance > 0,
+        Customer.user_id == admin.id,
+    ).order_by(
+        Customer.customer_id.asc()
+    ).all()
+
+    total_pending = sum(
+        float(customer.remaining_balance or 0)
+        for customer in customers
+    )
+
+    return jsonify({
+        "success": True,
+        "customers": [
+            {
+                "customer_id": customer.customer_id,
+                "name": customer.name or "",
+                "mobile": customer.mobile or "",
+                "loan_amount": float(customer.loan_amount or 0),
+                "total_paid": float(customer.total_paid or 0),
+                "remaining_balance": float(
+                    customer.remaining_balance or 0
+                ),
+            }
+            for customer in customers
+        ],
+        "total_pending": total_pending,
+        "customer_count": len(customers),
+    }), 200
+
+
 # MOBILE COLLECTION SHEET API
 # ==========================
 
