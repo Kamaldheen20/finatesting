@@ -215,6 +215,8 @@ def activate():
                 return jsonify(success=False, message="Invalid license key"), 403
             if row["status"] != "active":
                 return jsonify(success=False, message="License is not active"), 403
+            if row.get("expires_at") and row["expires_at"] <= datetime.now(timezone.utc):
+                return jsonify(success=False, message="License has expired. Contact the administrator for renewal."), 403
 
             cur.execute(
                 "SELECT * FROM devices WHERE license_id = %s AND device_id = %s",
