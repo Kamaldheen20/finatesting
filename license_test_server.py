@@ -144,6 +144,13 @@ def init_db():
 def key_hash(value):
     return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
 
+def record_activation(cur, license_id, device_id, outcome, message):
+    cur.execute(
+        """INSERT INTO license_activation_events (license_id, device_id, outcome, message)
+           VALUES (%s, %s, %s, %s)""",
+        (license_id, (device_id or "")[:250], outcome[:40], message[:500]),
+    )
+
 
 def load_private_key():
     pem = os.getenv("LICENSE_PRIVATE_KEY_PEM", "").replace("\\n", "\n").strip()
@@ -224,10 +231,16 @@ def activate():
             row = cur.fetchone()
 
             if not row:
+                record_activation(cur, None, device_id, "denied", "Invalid license key")
+                conn.commit()
                 return jsonify(success=False, message="Invalid license key"), 403
             if row["status"] != "active":
+                record_activation(cur, row["id"], device_id, "denied", "License is not active")
+                conn.commit()
                 return jsonify(success=False, message="License is not active"), 403
             if row.get("expires_at") and row["expires_at"] <= datetime.now(timezone.utc):
+                record_activation(cur, row["id"], device_id, "denied", "License has expired")
+                conn.commit()
                 return jsonify(success=False, message="License has expired. Contact the administrator for renewal."), 403
 
             cur.execute(
@@ -240,6 +253,8 @@ def activate():
                 cur.execute("SELECT COUNT(*) AS count FROM devices WHERE license_id = %s", (row["id"],))
                 count = cur.fetchone()["count"]
                 if count >= row["max_devices"]:
+                    record_activation(cur, row["id"], device_id, "denied", "Device limit reached")
+                    conn.commit()
                     return jsonify(success=False, message="This license has reached its device limit"), 403
 
                 now = datetime.now(timezone.utc)
@@ -258,6 +273,7 @@ def activate():
             # Sign before committing the device change. If signing fails,
             # the transaction rolls back and the device slot is not consumed.
             token = make_token(row, device_id, app_version)
+            record_activation(cur, row["id"], device_id, "success", "License activated")
 
         conn.commit()
 
