@@ -72,6 +72,7 @@ details{margin:4px 0}summary{cursor:pointer;color:#334155;font-weight:650}
 <form method="post" action="/admin/create-web"><input type="hidden" name="csrf_token" value="{{csrf_token}}">
 <div class="formgrid">
 <input name="customer_name" placeholder="Customer / business name" required maxlength="180">
+<input name="customer_email" type="email" placeholder="Customer email (for alerts)">
 <input name="max_devices" type="number" min="1" max="1000" value="1" required>
 <select name="plan"><option value="monthly">Monthly (30 days)</option><option value="yearly">Yearly (365 days)</option><option value="lifetime">Lifetime</option><option value="custom">Custom expiry</option></select>
 <input name="expires_at" type="date" aria-label="Custom expiry date">
@@ -104,6 +105,7 @@ details{margin:4px 0}summary{cursor:pointer;color:#334155;font-weight:650}
 <td><div class="actions">
 <details><summary>Edit / renew</summary><form method="post" action="/admin/license/{{x.id}}/edit"><input type="hidden" name="csrf_token" value="{{csrf_token}}">
 <input name="customer_name" value="{{x.customer_name}}" placeholder="Customer name" required>
+<input name="customer_email" type="email" value="{{x.customer_email or ''}}" placeholder="Customer email">
 <input name="max_devices" type="number" min="1" max="1000" value="{{x.max_devices}}" required>
 <input name="expires_at" type="date" value="{{x.expiry_date or ''}}">
 <textarea name="notes" placeholder="Internal notes">{{x.notes or ''}}</textarea>
@@ -285,9 +287,9 @@ def admin_create_web():
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("""INSERT INTO licenses (license_hash, customer_name, max_devices, status, expires_at, notes)
-                           VALUES (%s,%s,%s,'active',%s,%s) RETURNING id""",
-                        (key_hash(license_key), customer_name, max_devices, expiry, notes))
+            cur.execute("""INSERT INTO licenses (license_hash, customer_name, customer_email, max_devices, status, expires_at, notes)
+                           VALUES (%s,%s,%s,%s,'active',%s,%s) RETURNING id""",
+                        (key_hash(license_key), customer_name, customer_email or None, max_devices, expiry, notes))
             license_id = cur.fetchone()["id"]
         audit(conn, license_id, "license_created", f"Customer={customer_name}; devices={max_devices}; plan={plan}; expiry={expiry}")
         conn.commit()
@@ -321,8 +323,8 @@ def admin_edit_license(license_id):
             cur.execute("SELECT * FROM licenses WHERE id=%s FOR UPDATE", (license_id,))
             old = cur.fetchone()
             if not old: return redirect_message("License not found.")
-            cur.execute("UPDATE licenses SET customer_name=%s,max_devices=%s,expires_at=%s,notes=%s WHERE id=%s",
-                        (name, max_devices, expiry, notes, license_id))
+            cur.execute("UPDATE licenses SET customer_name=%s,customer_email=%s,max_devices=%s,expires_at=%s,notes=%s WHERE id=%s",
+                        (name, customer_email or None, max_devices, expiry, notes, license_id))
         audit(conn, license_id, "license_updated", f"name={old['customer_name']}→{name}; max_devices={old['max_devices']}→{max_devices}; expiry={old['expires_at']}→{expiry}; notes updated")
         conn.commit()
     finally: conn.close()
