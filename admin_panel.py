@@ -513,7 +513,7 @@ def admin_export_csv():
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("""SELECT l.id,l.customer_name,l.status,l.max_devices,l.expires_at,l.created_at,l.notes,
+            cur.execute("""SELECT l.id,l.customer_name,l.customer_email,l.status,l.max_devices,l.expires_at,l.created_at,l.notes,
                            (SELECT COUNT(*) FROM devices d WHERE d.license_id=l.id) AS device_count,
                            (SELECT COALESCE(SUM(p.amount),0) FROM license_payments p WHERE p.license_id=l.id) AS payments_total
                            FROM licenses l ORDER BY l.id""")
@@ -538,8 +538,9 @@ def admin_backup():
             devices = cur.fetchall()
             cur.execute("SELECT id,license_id,amount,payment_date,method,reference,notes,created_at FROM license_payments ORDER BY id")
             payments = cur.fetchall()
+        from datetime import date
         def encode(value):
-            if isinstance(value, (datetime,)): return value.isoformat()
+            if isinstance(value, (datetime, date)): return value.isoformat()
             if isinstance(value, Decimal): return str(value)
             raise TypeError(f"Unsupported type: {type(value).__name__}")
         payload = {"created_at":datetime.now(timezone.utc).isoformat(),"warning":"Contains license hashes and customer/payment metadata. Store securely; plaintext license keys cannot be recovered.","licenses":licenses,"devices":devices,"payments":payments}
