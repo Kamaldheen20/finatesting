@@ -50,7 +50,10 @@ table{width:100%;border-collapse:collapse;background:white}th,td{padding:10px;bo
 <td>{% if x["status"] == "active" %}
 <form style="display:inline" method="post" action="/admin/license/{{x["id"]}}/reset-device"><button class="warn">Reset Device</button></form>
 <form style="display:inline" method="post" action="/admin/license/{{x["id"]}}/revoke"><button class="danger">Revoke</button></form>
-{% endif %}</td></tr>
+{% endif %}
+<form style="display:inline" method="post" action="/admin/license/{{x["id"]}}/delete" onsubmit="return confirm('Permanently delete this license and its registered devices? This cannot be undone.');">
+<button class="danger" type="submit">Delete</button>
+</form></td></tr>
 {% endfor %}</table></div></body></html>
 """
 
@@ -153,6 +156,22 @@ def admin_revoke(license_id):
     finally:
         conn.close()
     return redirect(url_for("admin_panel", message="License revoked."))
+
+@app.post("/admin/license/<int:license_id>/delete")
+def admin_delete_license(license_id):
+    if not logged_in():
+        return redirect(url_for("admin_login"))
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM licenses WHERE id=%s", (license_id,))
+            deleted = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    message = "License deleted permanently." if deleted else "License not found."
+    return redirect(url_for("admin_panel", message=message))
+
 
 @app.post("/admin/license/<int:license_id>/reset-device")
 def admin_reset_device(license_id):
