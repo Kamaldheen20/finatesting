@@ -56,7 +56,7 @@ details{margin:4px 0}summary{cursor:pointer;color:#334155;font-weight:650}
 @media(max-width:600px){body{padding:12px}.card{padding:13px}}
 </style></head><body>
 <div class="top"><div><h1>Finance License Admin</h1><div class="muted">License lifecycle · devices · payments · audit</div></div>
-<div class="tools"><a href="/admin/export.csv">Export CSV</a><a href="/admin/backup.json">Backup JSON</a><a href="/admin/audit">Audit log</a><a href="/admin/logout">Logout</a></div></div>
+<div class="tools"><a href="/admin/export.csv">Export CSV</a><a href="/admin/backup.json">Backup JSON</a><a href="/admin/audit">Audit log</a><form method="post" action="/admin/notify-expiring" onsubmit="return confirm('Send expiry warning emails to customers expiring within 30 days?');"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="secondary">Send expiry alerts</button></form><a href="/admin/diagnostics">Activation diagnostics</a><a href="/admin/logout">Logout</a></div></div>
 {% if message %}<div class="msg">{{message}}</div>{% endif %}
 {% if created_key %}<div class="keybox"><strong>Copy this new license key now. It will not be shown again:</strong><br>{{created_key}}</div>{% endif %}
 <div class="grid">
@@ -85,7 +85,7 @@ details{margin:4px 0}summary{cursor:pointer;color:#334155;font-weight:650}
 <button class="secondary">Search / filter</button><a href="/admin">Clear</a></form>
 <div class="tablewrap"><table><thead><tr><th>ID / Customer</th><th>Status / Expiry</th><th>Devices</th><th>Payments</th><th>Created</th><th>Actions</th></tr></thead><tbody>
 {% for x in licenses %}<tr>
-<td><strong>#{{x.id}} · {{x.customer_name}}</strong><div class="muted">{{x.notes or ""}}</div></td>
+<td><strong>#{{x.id}} · {{x.customer_name}}</strong><div class="muted">{{x.customer_email or ""}}</div><div class="muted">{{x.notes or ""}}</div></td>
 <td><span class="badge {% if x.effective_status!='active' %}{{'expired' if x.effective_status=='expired' else 'revoked'}}{% endif %}">{{x.effective_status}}</span><div class="small">{{x.expires_at or "Never expires"}}</div></td>
 <td>{{x.device_count}} / {{x.max_devices}}<details><summary>Manage devices</summary>
 {% for d in x.device_rows %}<div class="small">{{d.device_id}}<br><span class="muted">Last seen: {{d.last_seen or "Unknown"}}</span>
@@ -259,6 +259,9 @@ def admin_create_web():
         return redirect(url_for("admin_login"))
     customer_name = request.form.get("customer_name", "").strip()
     notes = request.form.get("notes", "").strip()
+    customer_email = request.form.get("customer_email", "").strip()[:254]
+    if customer_email and "@" not in customer_email:
+        return redirect_message("Enter a valid customer email address.")
     try:
         max_devices = int(request.form.get("max_devices", "1"))
         plan = request.form.get("plan", "monthly")
@@ -302,6 +305,9 @@ def admin_edit_license(license_id):
     if not logged_in(): return redirect(url_for("admin_login"))
     name = request.form.get("customer_name", "").strip()
     notes = request.form.get("notes", "").strip()
+    customer_email = request.form.get("customer_email", "").strip()[:254]
+    if customer_email and "@" not in customer_email:
+        return redirect_message("Enter a valid customer email address.")
     try:
         max_devices = int(request.form.get("max_devices", "1"))
         expiry = parse_expiry(request.form.get("expires_at"))
@@ -435,6 +441,59 @@ def admin_reset_device(license_id):
     finally: conn.close()
     return redirect_message(f"Device bindings reset ({count} removed).")
 
+@app.get("/admin/diagnostics")
+def admin_diagnostics():
+    if not logged_in(): return redirect(url_for("admin_login"))
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,license_id,device_id,outcome,message,created_at FROM license_activation_events ORDER BY id DESC LIMIT 500")
+            events = cur.fetchall()
+        html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Activation diagnostics</title></head><body style="font:14px Arial;padding:20px"><h1>Activation diagnostics</h1><p><a href="/admin">Back to admin</a></p><div style="overflow:auto"><table border="1" cellpadding="8" cellspacing="0"><tr><th>Time (UTC)</th><th>License ID</th><th>Device ID</th><th>Outcome</th><th>Message</th></tr>{% for x in events %}<tr><td>{{x.created_at}}</td><td>{{x.license_id or "—"}}</td><td>{{x.device_id or "—"}}</td><td>{{x.outcome}}</td><td>{{x.message}}</td></tr>{% endfor %}</table></div></body></html>"""
+        return render_template_string(html, events=events)
+    finally: conn.close()
+
+@app.post("/admin/notify-expiring")
+def admin_notify_expiring():
+    if not logged_in(): return redirect(url_for("admin_login"))
+    import os, smtplib
+    from email.message import EmailMessage
+    host = os.getenv("SMTP_HOST", "").strip()
+    username = os.getenv("SMTP_USERNAME", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+    sender = os.getenv("SMTP_FROM", username).strip()
+    if not host or not sender:
+        return redirect_message("Email alerts are not configured. Set SMTP_HOST, SMTP_FROM, SMTP_USERNAME and SMTP_PASSWORD in Render.")
+    conn = connect()
+    sent = 0
+    skipped = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,customer_name,customer_email,expires_at FROM licenses WHERE status='active' AND expires_at >= NOW() AND expires_at < NOW()+INTERVAL '30 days' ORDER BY expires_at")
+            rows = cur.fetchall()
+        with smtplib.SMTP(host, int(os.getenv("SMTP_PORT", "587")), timeout=15) as server:
+            server.starttls()
+            if username: server.login(username, password)
+            for row in rows:
+                if not row.get("customer_email"):
+                    skipped += 1
+                    continue
+                msg = EmailMessage()
+                msg["Subject"] = "Finance application license expiry reminder"
+                msg["From"] = sender
+                msg["To"] = row["customer_email"]
+                msg.set_content("Hello " + row["customer_name"] + ",\\n\\nYour license (ID " + str(row["id"]) + ") expires on " + row["expires_at"].date().isoformat() + ". Please contact your administrator to renew it.\\n")
+                server.send_message(msg)
+                sent += 1
+        audit(conn, None, "expiry_notifications_sent", "sent=" + str(sent) + "; skipped_without_email=" + str(skipped))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        app.logger.exception("Expiry notification send failed")
+        return redirect_message("Could not send expiry alerts. Check SMTP settings and Render logs.")
+    finally: conn.close()
+    return redirect_message("Expiry alerts sent: " + str(sent) + "; skipped without email: " + str(skipped) + ".")
+
 @app.get("/admin/audit")
 def admin_audit():
     if not logged_in(): return redirect(url_for("admin_login"))
@@ -459,9 +518,9 @@ def admin_export_csv():
             rows = cur.fetchall()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["id","customer_name","status","max_devices","expires_at","created_at","notes","device_count","payments_total"])
+        writer.writerow(["id","customer_name","customer_email","status","max_devices","expires_at","created_at","notes","device_count","payments_total"])
         for row in rows:
-            writer.writerow([row.get(k) for k in ["id","customer_name","status","max_devices","expires_at","created_at","notes","device_count","payments_total"]])
+            writer.writerow([row.get(k) for k in ["id","customer_name","customer_email","status","max_devices","expires_at","created_at","notes","device_count","payments_total"]])
         return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=license-report.csv"})
     finally: conn.close()
 
@@ -471,7 +530,7 @@ def admin_backup():
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id,license_hash,customer_name,max_devices,status,expires_at,created_at,notes FROM licenses ORDER BY id")
+            cur.execute("SELECT id,license_hash,customer_name,customer_email,max_devices,status,expires_at,created_at,notes FROM licenses ORDER BY id")
             licenses = cur.fetchall()
             cur.execute("SELECT id,license_id,device_id,created_at,last_seen FROM devices ORDER BY id")
             devices = cur.fetchall()
