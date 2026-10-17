@@ -5,6 +5,7 @@ import secrets
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from openpyxl import Workbook
 from flask import (
     Response, abort, jsonify, redirect, render_template_string,
     request, session, url_for
@@ -56,7 +57,7 @@ details{margin:4px 0}summary{cursor:pointer;color:#334155;font-weight:650}
 @media(max-width:600px){body{padding:12px}.card{padding:13px}}
 </style></head><body>
 <div class="top"><div><h1>Finance License Admin</h1><div class="muted">License lifecycle · devices · payments · audit</div></div>
-<div class="tools"><a href="/admin/export.csv">Export CSV</a><a href="/admin/backup.json">Backup JSON</a><a href="/admin/audit">Audit log</a><form method="post" action="/admin/notify-expiring" onsubmit="return confirm('Send expiry warning emails to customers expiring within 30 days?');"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="secondary">Send expiry alerts</button></form><a href="/admin/diagnostics">Activation diagnostics</a><a href="/admin/logout">Logout</a></div></div>
+<div class="tools"><a href="/admin/export.csv">Export CSV</a><a href="/admin/export.xlsx">Export Excel</a><a href="/admin/backup.json">Backup JSON</a><a href="/admin/audit">Audit log</a><form method="post" action="/admin/notify-expiring" onsubmit="return confirm('Send expiry warning emails to customers expiring within 30 days?');"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="secondary">Send expiry alerts</button></form><a href="/admin/diagnostics">Activation diagnostics</a><a href="/admin/logout">Logout</a></div></div>
 {% if message %}<div class="msg">{{message}}</div>{% endif %}
 {% if created_key %}<div class="keybox"><strong>Copy this new license key now. It will not be shown again:</strong><br>{{created_key}}</div>{% endif %}
 <div class="grid">
@@ -525,6 +526,110 @@ def admin_export_csv():
             writer.writerow([row.get(k) for k in ["id","customer_name","customer_email","status","max_devices","expires_at","created_at","notes","device_count","payments_total"]])
         return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition":"attachment; filename=license-report.csv"})
     finally: conn.close()
+
+@app.get("/admin/export.xlsx")
+def admin_export_excel():
+    if not logged_in():
+        return redirect(url_for("admin_login"))
+
+    workbook = Workbook()
+    licenses_sheet = workbook.active
+    licenses_sheet.title = "Licenses"
+    licenses_headers = [
+        "License ID", "Customer Name", "Customer Email", "Status", "Max Devices",
+        "Registered Devices", "Expiry Date", "Created At", "Internal Notes", "Recorded Payments Total"
+    ]
+    licenses_sheet.append(licenses_headers)
+
+    payments_sheet = workbook.create_sheet("Payments")
+    payments_sheet.append([
+        "Payment ID", "License ID", "Customer Name", "Amount", "Payment Date",
+        "Method", "Reference", "Notes", "Recorded At"
+    ])
+
+    devices_sheet = workbook.create_sheet("Devices")
+    devices_sheet.append([
+        "Device Record ID", "License ID", "Customer Name", "Device ID", "Created At", "Last Seen"
+    ])
+
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT l.id, l.customer_name, l.customer_email, l.status, l.max_devices,
+                       l.expires_at, l.created_at, l.notes,
+                       (SELECT COUNT(*) FROM devices d WHERE d.license_id = l.id) AS device_count,
+                       (SELECT COALESCE(SUM(p.amount), 0) FROM license_payments p WHERE p.license_id = l.id) AS payments_total,
+                       CASE WHEN l.status = 'revoked' THEN 'revoked'
+                            WHEN l.expires_at IS NOT NULL AND l.expires_at < NOW() THEN 'expired'
+                            ELSE l.status END AS effective_status
+                FROM licenses l ORDER BY l.id
+            """)
+            licenses = cur.fetchall()
+            for row in licenses:
+                licenses_sheet.append([
+                    row["id"], row["customer_name"], row.get("customer_email"),
+                    row["effective_status"], row["max_devices"], row["device_count"],
+                    row.get("expires_at"), row.get("created_at"), row.get("notes"),
+                    row["payments_total"]
+                ])
+
+            cur.execute("""
+                SELECT p.id, p.license_id, l.customer_name, p.amount, p.payment_date,
+                       p.method, p.reference, p.notes, p.created_at
+                FROM license_payments p LEFT JOIN licenses l ON l.id = p.license_id
+                ORDER BY p.license_id, p.payment_date, p.id
+            """)
+            for row in cur.fetchall():
+                payments_sheet.append([
+                    row["id"], row["license_id"], row.get("customer_name"), row["amount"],
+                    row["payment_date"], row["method"], row.get("reference"), row.get("notes"),
+                    row.get("created_at")
+                ])
+
+            cur.execute("""
+                SELECT d.id, d.license_id, l.customer_name, d.device_id, d.created_at, d.last_seen
+                FROM devices d LEFT JOIN licenses l ON l.id = d.license_id
+                ORDER BY d.license_id, d.id
+            """)
+            for row in cur.fetchall():
+                devices_sheet.append([
+                    row["id"], row["license_id"], row.get("customer_name"), row["device_id"],
+                    row.get("created_at"), row.get("last_seen")
+                ])
+    finally:
+        conn.close()
+
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(fill_type="solid", fgColor="243147")
+            cell.alignment = Alignment(vertical="center")
+        for column_cells in sheet.columns:
+            values = [len(str(cell.value)) for cell in column_cells if cell.value is not None]
+            width = min(max(max(values, default=10) + 2, 12), 42)
+            sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = width
+        for row in sheet.iter_rows(min_row=2):
+            for cell in row:
+                if hasattr(cell.value, "tzinfo") and cell.value.tzinfo is not None:
+                    cell.value = cell.value.replace(tzinfo=None)
+
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="finance-license-report.xlsx"',
+            "Cache-Control": "no-store",
+        },
+    )
+
 
 @app.get("/admin/backup.json")
 def admin_backup():
