@@ -549,7 +549,8 @@ def admin_export_excel():
 
     devices_sheet = workbook.create_sheet("Devices")
     devices_sheet.append([
-        "Device Record ID", "License ID", "Customer Name", "Device ID", "Created At", "Last Seen"
+        "Device Record ID", "License ID", "Customer Name", "Device ID",
+        "Activation Status", "Created At", "Last Seen"
     ])
 
     conn = connect()
@@ -588,14 +589,20 @@ def admin_export_excel():
                 ])
 
             cur.execute("""
-                SELECT d.id, d.license_id, l.customer_name, d.device_id, d.created_at, d.last_seen
+                SELECT d.id, d.license_id, l.customer_name, d.device_id, d.created_at, d.last_seen,
+                       CASE
+                           WHEN l.id IS NULL THEN 'Blocked - license deleted'
+                           WHEN l.status <> 'active' THEN 'Blocked - license ' || l.status
+                           WHEN l.expires_at IS NOT NULL AND l.expires_at < NOW() THEN 'Blocked - expired'
+                           ELSE 'Authorized - registered device'
+                       END AS activation_status
                 FROM devices d LEFT JOIN licenses l ON l.id = d.license_id
                 ORDER BY d.license_id, d.id
             """)
             for row in cur.fetchall():
                 devices_sheet.append([
                     row["id"], row["license_id"], row.get("customer_name"), row["device_id"],
-                    row.get("created_at"), row.get("last_seen")
+                    row["activation_status"], row.get("created_at"), row.get("last_seen")
                 ])
     finally:
         conn.close()
