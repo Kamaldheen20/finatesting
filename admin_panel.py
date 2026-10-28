@@ -10,7 +10,7 @@ from flask import (
     Response, abort, jsonify, redirect, render_template_string,
     request, session, url_for
 )
-from license_test_server import app, ADMIN_KEY, connect, key_hash
+from license_test_server import app, ADMIN_KEY, connect, key_hash, encrypt_license_key, decrypt_license_key
 
 # Configure a strong LICENSE_SESSION_SECRET in Render. Never use the admin key as the session secret.
 app.secret_key = __import__("os").getenv("LICENSE_SESSION_SECRET") or secrets.token_hex(32)
@@ -288,9 +288,10 @@ def admin_create_web():
     conn = connect()
     try:
         with conn.cursor() as cur:
-            cur.execute("""INSERT INTO licenses (license_hash, customer_name, customer_email, max_devices, status, expires_at, notes)
-                           VALUES (%s,%s,%s,%s,'active',%s,%s) RETURNING id""",
-                        (key_hash(license_key), customer_name, customer_email or None, max_devices, expiry, notes))
+            encrypted_key = encrypt_license_key(license_key)
+            cur.execute("""INSERT INTO licenses (license_hash, license_key_encrypted, customer_name, customer_email, max_devices, status, expires_at, notes)
+                           VALUES (%s,%s,%s,%s,%s,'active',%s,%s) RETURNING id""",
+                        (key_hash(license_key), encrypted_key, customer_name, customer_email or None, max_devices, expiry, notes))
             license_id = cur.fetchone()["id"]
         audit(conn, license_id, "license_created", f"Customer={customer_name}; devices={max_devices}; plan={plan}; expiry={expiry}")
         conn.commit()
