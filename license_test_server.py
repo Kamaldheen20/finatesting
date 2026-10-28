@@ -9,6 +9,7 @@ import psycopg
 from psycopg.rows import dict_row
 from flask import Flask, jsonify, request
 from cryptography.hazmat.primitives import serialization
+from cryptography.fernet import Fernet, InvalidToken
 
 app = Flask(__name__)
 
@@ -69,6 +70,7 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_devices_license_id ON devices(license_id);
                 CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
             """)
+            cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS license_key_encrypted TEXT")
             cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS notes TEXT")
             cur.execute("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS customer_email TEXT")
             cur.execute("""CREATE TABLE IF NOT EXISTS license_payments (
@@ -94,6 +96,33 @@ def init_db():
 
 def key_hash(value):
     return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()
+
+
+def _license_key_fernet():
+    """Return the Fernet cipher configured by the operator; never use a hard-coded fallback."""
+    raw_key = os.getenv("LICENSE_KEY_ENCRYPTION_KEY", "").strip()
+    if not raw_key:
+        raise RuntimeError(
+            "LICENSE_KEY_ENCRYPTION_KEY is missing. Configure a persistent Fernet key in Render before issuing recoverable license keys."
+        )
+    try:
+        return Fernet(raw_key.encode("ascii"))
+    except Exception as exc:
+        raise RuntimeError("LICENSE_KEY_ENCRYPTION_KEY must be a valid Fernet key.") from exc
+
+
+def encrypt_license_key(license_key):
+    return _license_key_fernet().encrypt(license_key.encode("utf-8")).decode("ascii")
+
+
+def decrypt_license_key(encrypted_value):
+    if not encrypted_value:
+        return None
+    try:
+        return _license_key_fernet().decrypt(encrypted_value.encode("ascii")).decode("utf-8")
+    except (RuntimeError, InvalidToken, ValueError, UnicodeError):
+        # Missing/rotated key or invalid ciphertext: do not expose ciphertext as if it were a key.
+        return None
 
 
 def record_activation(cur, license_id, device_id, outcome, message):
@@ -134,8 +163,9 @@ def create_license():
     license_key = "FIN-" + secrets.token_hex(9).upper()
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO licenses (license_hash, customer_name, max_devices, status, created_at) VALUES (%s, %s, %s, 'active', %s) RETURNING id",
-                        (key_hash(license_key), customer_name, max_devices, datetime.now(timezone.utc)))
+            encrypted_key = encrypt_license_key(license_key)
+            cur.execute("INSERT INTO licenses (license_hash, license_key_encrypted, customer_name, max_devices, status, created_at) VALUES (%s, %s, %s, %s, 'active', %s) RETURNING id",
+                        (key_hash(license_key), encrypted_key, customer_name, max_devices, datetime.now(timezone.utc)))
             license_id = cur.fetchone()["id"]
         conn.commit()
     return jsonify(success=True, license_id=license_id, license_key=license_key, customer_name=customer_name, max_devices=max_devices), 201
